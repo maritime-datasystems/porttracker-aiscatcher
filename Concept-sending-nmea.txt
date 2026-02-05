@@ -76,76 +76,112 @@ AIS-catcher -x 0.0.0.0 4242 -D "postgresql://user:pass@localhost/ais"
 The pieces exist for you to build your own server-side, but the actual aiscatcher.org infrastructure is maintained privately by jvde-github.
 
 
+4. What Gets Shared
+The data is sent as JSON-wrapped NMEA messages (COMMUNITY_HUB format) with:
 
-Thought for 4s
+Raw NMEA sentences
+Metadata (signal strength, timestamps, receiver info)
+Your station's UUID for identification
+5. Key Points
+Aspect	Details
+Connection direction	Outbound from your device (no port forwarding needed)
+Fixed IP required?	No - your device connects to the server's fixed IP
+Protocol	TCP with keep-alive
+Data format	JSON with embedded NMEA
+Authentication	UUID/Sharing Key embedded in each message
+Firewall	Only needs outbound access to port 4242
+Summary
+The sharing key acts as your station's authentication token - it's embedded in every message you send to the server via TCP. The server at 185.77.96.227:4242 receives these messages and associates them with your registered station. Since it's an outbound connection, you don't need a fixed IP or special network configuration - you just need to be able to make outbound TCP connections.
 
 
-Let me search the repository for any server-side or database-related code:
 
-Searched
-receive.*json
-0 results
-Searched
-*server*
-4 results
-Searched
-PostgreSQL\|sqlite\|database
-0 results
-Searched
-INSERT INTO
-12 results
-Analyzed
 
-HTTPServer.cpp
-Now I have a complete picture. Let me answer your question:
 
-Server-Side Code in the Repository
-Short answer: The server-side receiver code for aiscatcher.org is NOT in this repository.
 
-What IS in this repository:
-Component	Location	Purpose
-Client sender	
-Network.cpp
- (TCPClientStreamer)	Sends JSON to aiscatcher.org:4242
-Local PostgreSQL export	
-Source/DBMS/PostgreSQL.cpp
-Write AIS data to YOUR OWN database
-Local web server	
-Source/IO/HTTPServer.cpp
-Serve data to local web UI
-SQL schema	
-Source/DBMS/create.sql
-Database schema for local storage
-Database Tables (for LOCAL use only)
-The codebase includes support for writing to your own PostgreSQL database (not the aiscatcher.org server):
 
-sql
--- From create.sql - these are for YOUR local database
-ais_vessel       -- Ship identity (MMSI, name, callsign)
-ais_vessel_pos   -- Position reports  
-ais_vessel_static -- Static data (destination, ETA)
-ais_basestation  -- Base station messages
-ais_sar_position -- SAR aircraft positions
-ais_aton         -- Aids to Navigation
-ais_message      -- Raw message log
-ais_nmea         -- NMEA sentences
-The aiscatcher.org Server
-The community hub server at aiscatcher.org is a separate, closed-source backend project. What we know:
+xample JSON Message (as sent to aiscatcher.org)
+json
+{
+  "class": "AIS",
+  "device": "AIS-catcher",
+  "version": 63,
+  "driver": 1,
+  "hardware": "RTL-SDR",
+  "channel": "A",
+  "repeat": 0,
+  "ssc": 123456789,
+  "sl": 168,
+  "rxuxtime": 1738765245,
+  "rxtime": "2026-02-05T14:52:33Z",
+  "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "signalpower": -8.5,
+  "ppm": 12.3,
+  "mmsi": 211234567,
+  "type": 1,
+  "nmea": ["!AIVDM,1,1,,A,13u@mT0P00PF3L<000000000000,0*56"]
+}
+Field Breakdown
+Field	Description	Example
+class	Always "AIS"	"AIS"
+device	Software name	"AIS-catcher"
+version	Version number	63
+driver	SDR driver type	1 (RTL-SDR)
+hardware	Hardware description	"RTL-SDR"
+channel	VHF channel (A=161.975MHz, B=162.025MHz)	"A"
+repeat	Message repeat indicator (0-3)	0
+ssc	Sample start counter (for deduplication)	123456789
+sl	Sample length	168
+rxuxtime	Unix timestamp of reception	1738765245
+rxtime	Human-readable timestamp	"2026-02-05T14:52:33Z"
+uuid	Your sharing key	"a1b2c3d4-..."
+signalpower	Signal strength in dB	-8.5
+ppm	Frequency offset in parts-per-million	12.3
+mmsi	Ship's MMSI number	211234567
+type	AIS message type (1-27)	1
+nmea	Array of raw NMEA sentences	["!AIVDM,..."]
 
-Runs on 185.77.96.227:4242
-Receives TCP connections with JSON data
-Deduplicates messages from multiple stations
-Provides the web interface at www.aiscatcher.org
-The server-side processing, aggregation, and web API are maintained by the project author (jvde-github) separately and are not open source.
 
-If You Want Your Own Server
-You could build a receiver using the included components:
 
-Use -S port to create a TCP listener that receives NMEA
-Use -D to write to PostgreSQL
-Use the 
-create.sql
- schema
-But this would be for your own private aggregation, not the community hub.
 
-there is also the full ais-catcher repository - check if the server / receiver is there 
+Multi-Part Message Example
+For longer AIS messages (like Type 5 - Ship Static Data), the NMEA array contains multiple sentences:
+
+
+
+{
+  "class": "AIS",
+  "device": "AIS-catcher",
+  "version": 63,
+  "hardware": "RTL-SDR",
+  "channel": "B",
+  "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "signalpower": -6.2,
+  "ppm": 8.1,
+  "mmsi": 211234567,
+  "type": 5,
+  "nmea": [
+    "!AIVDM,2,1,3,B,55?MbV02>H97ac<H4eEK84LE8@T4@Dn222220j1p;486666666666666,0*54",
+    "!AIVDM,2,2,3,B,60P,2*21"
+  ]
+}
+
+
+
+Field	Description	Example
+class	Always "AIS"	"AIS"
+device	Software name	"AIS-catcher"
+version	Version number	63
+driver	SDR driver type	1 (RTL-SDR)
+hardware	Hardware description	"RTL-SDR"
+channel	VHF channel (A=161.975MHz, B=162.025MHz)	"A"
+repeat	Message repeat indicator (0-3)	0
+ssc	Sample start counter (for deduplication)	123456789
+sl	Sample length	168
+rxuxtime	Unix timestamp of reception	1738765245
+rxtime	Human-readable timestamp	"2026-02-05T14:52:33Z"
+uuid	Your sharing key	"a1b2c3d4-..."
+signalpower	Signal strength in dB	-8.5
+ppm	Frequency offset in parts-per-million	12.3
+mmsi	Ship's MMSI number	211234567
+type	AIS message type (1-27)	1
+nmea	Array of raw NMEA sentences	["!AIVDM,..."]
