@@ -75,3 +75,77 @@ AIS-catcher -P your-server-ip 4242 JSON on
 AIS-catcher -x 0.0.0.0 4242 -D "postgresql://user:pass@localhost/ais"
 The pieces exist for you to build your own server-side, but the actual aiscatcher.org infrastructure is maintained privately by jvde-github.
 
+
+
+Thought for 4s
+
+
+Let me search the repository for any server-side or database-related code:
+
+Searched
+receive.*json
+0 results
+Searched
+*server*
+4 results
+Searched
+PostgreSQL\|sqlite\|database
+0 results
+Searched
+INSERT INTO
+12 results
+Analyzed
+
+HTTPServer.cpp
+Now I have a complete picture. Let me answer your question:
+
+Server-Side Code in the Repository
+Short answer: The server-side receiver code for aiscatcher.org is NOT in this repository.
+
+What IS in this repository:
+Component	Location	Purpose
+Client sender	
+Network.cpp
+ (TCPClientStreamer)	Sends JSON to aiscatcher.org:4242
+Local PostgreSQL export	
+Source/DBMS/PostgreSQL.cpp
+Write AIS data to YOUR OWN database
+Local web server	
+Source/IO/HTTPServer.cpp
+Serve data to local web UI
+SQL schema	
+Source/DBMS/create.sql
+Database schema for local storage
+Database Tables (for LOCAL use only)
+The codebase includes support for writing to your own PostgreSQL database (not the aiscatcher.org server):
+
+sql
+-- From create.sql - these are for YOUR local database
+ais_vessel       -- Ship identity (MMSI, name, callsign)
+ais_vessel_pos   -- Position reports  
+ais_vessel_static -- Static data (destination, ETA)
+ais_basestation  -- Base station messages
+ais_sar_position -- SAR aircraft positions
+ais_aton         -- Aids to Navigation
+ais_message      -- Raw message log
+ais_nmea         -- NMEA sentences
+The aiscatcher.org Server
+The community hub server at aiscatcher.org is a separate, closed-source backend project. What we know:
+
+Runs on 185.77.96.227:4242
+Receives TCP connections with JSON data
+Deduplicates messages from multiple stations
+Provides the web interface at www.aiscatcher.org
+The server-side processing, aggregation, and web API are maintained by the project author (jvde-github) separately and are not open source.
+
+If You Want Your Own Server
+You could build a receiver using the included components:
+
+Use -S port to create a TCP listener that receives NMEA
+Use -D to write to PostgreSQL
+Use the 
+create.sql
+ schema
+But this would be for your own private aggregation, not the community hub.
+
+there is also the full ais-catcher repository - check if the server / receiver is there 
