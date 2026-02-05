@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- App Version -->
+    <PreferenceCategory
+        android:title="App Info"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="app_version"
+            android:title="Version"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Network Information -->
+    <PreferenceCategory
+        android:title="Network Information"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="local_ip"
+            android:title="Local IP"
+            android:summary="Not available"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="external_ip"
+            android:title="External IP"
+            android:summary="Not available"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="network_status"
+            android:title="Network Status"
+            android:summary="Checking..."
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Service Status -->
+    <PreferenceCategory
+        android:title="Service Status"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="service_status"
+            android:title="AIS Receiver"
+            android:summary="Unknown"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="device_status"
+            android:title="SDR Device"
+            android:summary="Unknown"
+            android:selectable="true"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- AIS Messages -->
+    <PreferenceCategory
+        android:title="AIS Statistics"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="msg_count"
+            android:title="Messages Received"
+            android:summary="0"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- GPS Forwarding Status -->
+    <PreferenceCategory
+        android:title="GPS Status"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="gps_permission"
+            android:title="Location Permission"
+            android:summary="Tap to grant"
+            android:selectable="true"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="gps_status"
+            android:title="GPS Forwarding"
+            android:summary="Disabled"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="gps_coordinates"
+            android:title="Last Position"
+            android:summary="No position"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="gps_msg_count"
+            android:title="Messages Sent (last minute)"
+            android:summary="0"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- USB Debug -->
+    <PreferenceCategory
+        android:title="USB Debug"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="usb_devices"
+            android:title="Connected USB Devices"
+            android:summary="None detected"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

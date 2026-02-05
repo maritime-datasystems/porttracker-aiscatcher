@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- App Version -->
+    <PreferenceCategory
+        android:title="App Info"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="app_version"
+            android:title="Version"
+            android:summary="Loading..."
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Network Information -->
+    <PreferenceCategory
+        android:title="Network Information"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="internal_ip"
+            android:title="Internal IP"
+            android:summary="Detecting..."
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="external_ip"
+            android:title="External IP"
+            android:summary="Fetching..."
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Service Status -->
+    <PreferenceCategory
+        android:title="Service Control"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="service_status"
+            android:title="Service Status"
+            android:summary="○ Stopped"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="ais_messages"
+            android:title="AIS Messages"
+            android:summary="○ No messages"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="service_enabled"
+            android:title="AIS Receiver"
+            android:summary="Toggle to start/stop the service"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="force_stop"
+            android:title="⛔ Force Stop"
+            android:summary="Completely stop service and release all resources"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="restart_service"
+            android:title="🔄 Restart"
+            android:summary="Stop and restart the service (clears native state)"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="shutdown_app"
+            android:title="🔌 Shutdown"
+            android:summary="Stop all services and exit the app completely"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Device Settings -->
+    <PreferenceCategory
+        android:title="SDR Device"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="device_status"
+            android:title="Device Status"
+            android:summary="Scanning..."
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="device_type"
+            android:title="Device Type"
+            android:summary="RTL-SDR"
+            android:entries="@array/device_types"
+            android:entryValues="@array/device_type_values"
+            android:defaultValue="1"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="frequency_correction"
+            android:title="Frequency Correction (ppm)"
+            android:summary="0"
+            android:defaultValue="0"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- UDP Output 1 -->
+    <PreferenceCategory
+        android:title="UDP Output 1"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="udp1_enabled"
+            android:title="Enable UDP Output 1"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp1_host"
+            android:title="Host"
+            android:summary="127.0.0.1"
+            android:defaultValue="127.0.0.1"
+            android:dependency="udp1_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp1_port"
+            android:title="Port"
+            android:summary="10110"
+            android:defaultValue="10110"
+            android:dependency="udp1_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="udp1_json"
+            android:title="JSON Format"
+            android:summary="Send as JSON instead of NMEA"
+            android:defaultValue="false"
+            android:dependency="udp1_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- UDP Output 2 -->
+    <PreferenceCategory
+        android:title="UDP Output 2"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="udp2_enabled"
+            android:title="Enable UDP Output 2"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp2_host"
+            android:title="Host"
+            android:summary="127.0.0.1"
+            android:defaultValue="127.0.0.1"
+            android:dependency="udp2_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp2_port"
+            android:title="Port"
+            android:summary="10111"
+            android:defaultValue="10111"
+            android:dependency="udp2_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="udp2_json"
+            android:title="JSON Format"
+            android:summary="Send as JSON instead of NMEA"
+            android:defaultValue="false"
+            android:dependency="udp2_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- UDP Output 3 -->
+    <PreferenceCategory
+        android:title="UDP Output 3"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="udp3_enabled"
+            android:title="Enable UDP Output 3"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp3_host"
+            android:title="Host"
+            android:summary="127.0.0.1"
+            android:defaultValue="127.0.0.1"
+            android:dependency="udp3_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp3_port"
+            android:title="Port"
+            android:summary="10112"
+            android:defaultValue="10112"
+            android:dependency="udp3_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="udp3_json"
+            android:title="JSON Format"
+            android:summary="Send as JSON instead of NMEA"
+            android:defaultValue="false"
+            android:dependency="udp3_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- UDP Output 4 -->
+    <PreferenceCategory
+        android:title="UDP Output 4"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="udp4_enabled"
+            android:title="Enable UDP Output 4"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp4_host"
+            android:title="Host"
+            android:summary="127.0.0.1"
+            android:defaultValue="127.0.0.1"
+            android:dependency="udp4_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="udp4_port"
+            android:title="Port"
+            android:summary="10113"
+            android:defaultValue="10113"
+            android:dependency="udp4_enabled"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="udp4_json"
+            android:title="JSON Format"
+            android:summary="Send as JSON instead of NMEA"
+            android:defaultValue="false"
+            android:dependency="udp4_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- GPSD - Mobile GPS Forwarding -->
+    <PreferenceCategory
+        android:title="GPSD - GPS Forwarding"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="gpsd_enabled"
+            android:title="Send Mobile Phone GPS"
+            android:summary="Forward device GPS location via UDP"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="gpsd_host"
+            android:title="GPSD Host"
+            android:summary="127.0.0.1"
+            android:defaultValue="127.0.0.1"
+            android:dependency="gpsd_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="gpsd_port"
+            android:title="GPSD Port"
+            android:summary="2947"
+            android:defaultValue="2947"
+            android:dependency="gpsd_enabled"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="gpsd_interval"
+            android:title="Update Interval"
+            android:summary="Every 10 seconds"
+            android:defaultValue="10"
+            android:entries="@array/gpsd_interval_labels"
+            android:entryValues="@array/gpsd_interval_values"
+            android:dependency="gpsd_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- TCP Listener -->
+    <PreferenceCategory
+        android:title="TCP Listener"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="tcp_enabled"
+            android:title="Enable TCP Listener"
+            android:summary="Allow external connections"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="tcp_port"
+            android:title="TCP Port"
+            android:summary="10111"
+            android:defaultValue="10111"
+            android:dependency="tcp_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Web Interface -->
+    <PreferenceCategory
+        android:title="Web Interface"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="webviewer_enabled"
+            android:title="Enable Web Interface"
+            android:summary="Built-in web server with map"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="webviewer_port"
+            android:title="Web Port"
+            android:summary="8080"
+            android:defaultValue="8080"
+            android:dependency="webviewer_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Auto-Start -->
+    <PreferenceCategory
+        android:title="Auto-Start"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="auto_start_boot"
+            android:title="Start on Boot"
+            android:summary="Automatically start when device boots"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="auto_start_usb"
+            android:title="Start on USB Connect"
+            android:summary="Start when SDR device is connected"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- USB Debug -->
+    <PreferenceCategory
+        android:title="USB Debug"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="usb_debug"
+            android:title="Connected USB Devices"
+            android:summary="Scanning..."
+            android:selectable="true"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

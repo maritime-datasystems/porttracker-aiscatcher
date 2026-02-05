@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# APK files
+*.apk
+
+# Native
+*.so
+*.o

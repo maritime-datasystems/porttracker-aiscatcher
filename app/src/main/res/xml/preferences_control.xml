@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- AIS Receiver Control -->
+    <PreferenceCategory
+        android:title="AIS Receiver"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="control_status"
+            android:title="Service Status"
+            android:summary="Unknown"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="service_enabled"
+            android:title="▶ Start / ⏹ Stop"
+            android:summary="Enable or disable the AIS receiver service"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="force_stop"
+            android:title="⛔ Force Stop"
+            android:summary="Immediately kill service and release all resources"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- App Control -->
+    <PreferenceCategory
+        android:title="App Control"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="shutdown_app"
+            android:title="🔌 Shutdown"
+            android:summary="Stop all services and exit the app completely"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>
