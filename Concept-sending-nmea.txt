@@ -1,0 +1,77 @@
+
+
+Thought for 6s
+
+Analyzed
+~/DEVPROJECTS/AIS-catcher-for-Android/app/src/main/jni/AIS-catcher
+Searched
+*receiver*
+2 results
+Searched
+TCPlistener
+13 results
+Analyzed
+~/DEVPROJECTS/AIS-catcher-for-Android/app/src/main/jni/AIS-catcher/Source
+Searched
+community.*hub
+0 results
+Analyzed
+
+Network.h
+Searched
+4242
+1 result
+Analyzed
+README.md#L1-41
+Based on my exploration of the full AIS-catcher repository, here's the answer:
+
+Server-Side Code in the AIS-catcher Repository
+No, the server/receiver code for the aiscatcher.org community hub is NOT in this repository.
+
+What's in the AIS-catcher Repository (Client-Side Only)
+The repository contains client-side components only:
+
+Component	Description
+TCPClientStreamer
+Sends data TO aiscatcher.org:4242
+TCPlistenerStreamer
+Local TCP server to serve NMEA to local clients
+UDPStreamer
+Send NMEA/JSON via UDP
+HTTPStreamer
+POST data to HTTP endpoints
+PostgreSQL.cpp
+Write to YOUR local database
+WebViewer
+Local web UI for YOUR station
+Architecture Overview
+┌─────────────────────────────────────────────────────────────────┐
+│                    AIS-catcher Repository                        │
+│                    (What's in your workspace)                    │
+├─────────────────────────────────────────────────────────────────┤
+│  SDR Input ──► DSP/Decoder ──► TCPClientStreamer ───────────────┼──► aiscatcher.org:4242
+│                              ► UDPStreamer ──► Local apps        │     (CLOSED SOURCE)
+│                              ► PostgreSQL ──► Your DB            │
+│                              ► WebViewer ──► Local web UI        │
+└─────────────────────────────────────────────────────────────────┘
+                                                                    │
+                                                                    ▼
+                                                    ┌───────────────────────────┐
+                                                    │   aiscatcher.org Server   │
+                                                    │   (NOT open source)       │
+                                                    │                           │
+                                                    │  • Receives JSON on :4242 │
+                                                    │  • Stores in database     │
+                                                    │  • Deduplicates messages  │
+                                                    │  • Serves web interface   │
+                                                    └───────────────────────────┘
+If You Want to Build Your Own Receiver/Aggregator
+You can use the existing components to build a private aggregator:
+
+bash
+# Station 1 sends to your server
+AIS-catcher -P your-server-ip 4242 JSON on
+# Your server receives and stores
+AIS-catcher -x 0.0.0.0 4242 -D "postgresql://user:pass@localhost/ais"
+The pieces exist for you to build your own server-side, but the actual aiscatcher.org infrastructure is maintained privately by jvde-github.
+
