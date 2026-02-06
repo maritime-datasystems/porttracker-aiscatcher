@@ -257,13 +257,10 @@ class AisReceiverService : Service() {
                     Log.w(TAG, "No SDR device available (result=$result), web interface running")
                     updateNotification("No SDR device - Web only (port ${config.webViewerPort})")
                     
-                    // Try Run() first - it may block if web server has work to do
-                    Log.i(TAG, "Starting in web-only mode...")
-                    AisCatcherJava.Run()
-                    
-                    // If Run() returns immediately (no SDR), keep service alive for web server
-                    // The web server was created before Run() and serves on a separate thread
-                    Log.i(TAG, "Native Run() returned, keeping service alive for web interface...")
+                    // Web server was already created by createWebViewer() and runs on its own thread
+                    // Do NOT call Run() here - it crashes (SIGSEGV) without a valid SDR device
+                    // Just keep the service alive so the web server can continue serving
+                    Log.i(TAG, "Starting in web-only mode (keep-alive loop)...")
                     while (!shouldStop.get()) {
                         try {
                             Thread.sleep(1000)
