@@ -42,12 +42,20 @@
         android:title="Local Web Server"
         app:iconSpaceReserved="false">
 
+        <SwitchPreferenceCompat
+            android:key="webviewer_enabled"
+            android:title="Enable Web Viewer"
+            android:summary="Web-based map and status"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
         <EditTextPreference
             android:key="pref_local_web_port"
             android:title="Local Web Port"
             android:summary="8080"
             android:defaultValue="8080"
             android:inputType="number"
+            android:dependency="webviewer_enabled"
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>

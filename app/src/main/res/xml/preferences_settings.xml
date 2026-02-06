@@ -232,27 +232,6 @@
 
     </PreferenceCategory>
 
-    <!-- Web Interface -->
-    <PreferenceCategory
-        android:title="Web Interface"
-        app:iconSpaceReserved="false">
-
-        <SwitchPreferenceCompat
-            android:key="webviewer_enabled"
-            android:title="Enable Web Viewer"
-            android:summary="Web-based map and status"
-            android:defaultValue="true"
-            app:iconSpaceReserved="false" />
-
-        <EditTextPreference
-            android:key="webviewer_port"
-            android:title="Web Port"
-            android:summary="8080"
-            android:defaultValue="8080"
-            android:dependency="webviewer_enabled"
-            app:iconSpaceReserved="false" />
-
-    </PreferenceCategory>
 
     <!-- Auto-Start Options -->
     <PreferenceCategory
