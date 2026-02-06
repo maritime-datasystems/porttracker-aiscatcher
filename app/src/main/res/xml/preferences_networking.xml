@@ -23,6 +23,27 @@
 
     </PreferenceCategory>
 
+    <!-- External Web Portal / Remote Access -->
+    <PreferenceCategory
+        android:title="External Web Portal"
+        app:iconSpaceReserved="false">
+
+        <EditTextPreference
+            android:key="pref_station_name"
+            android:title="Porttracker AIS Station Name"
+            android:summary="Enter a name for your station"
+            android:defaultValue=""
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="pref_enable_remote"
+            android:title="Enable External Web Portal / Access"
+            android:summary="Create a tunnel for remote access to web interface"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
     <!-- DNS Settings -->
     <PreferenceCategory
         android:title="DNS Configuration"

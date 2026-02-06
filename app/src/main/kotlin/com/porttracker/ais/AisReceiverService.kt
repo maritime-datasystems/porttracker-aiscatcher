@@ -81,6 +81,7 @@ class AisReceiverService : Service() {
     private val shouldStop = AtomicBoolean(false)
     private var fileDescriptor: Int = -1
     private var gpsForwarder: GpsForwarder? = null
+    private var frpTunnelManager: FrpTunnelManager? = null
     private val startLock = Object()  // Prevent concurrent starts
 
     override fun onCreate() {
@@ -151,6 +152,16 @@ class AisReceiverService : Service() {
                 Log.i(TAG, "GPS forwarding started to ${config.gpsdHost}:${config.gpsdPort} (every ${config.gpsdInterval}s)")
             } else {
                 Log.w(TAG, "GPS forwarding failed to start (check permissions)")
+            }
+        }
+        
+        // Start FRP tunnel for remote access if enabled
+        if (config.remoteAccessEnabled && config.stationName.isNotEmpty()) {
+            frpTunnelManager = FrpTunnelManager(this)
+            if (frpTunnelManager?.startTunnel(config.stationName, config.webViewerPort) == true) {
+                Log.i(TAG, "FRP tunnel started for station: ${config.stationName}")
+            } else {
+                Log.w(TAG, "FRP tunnel failed to start")
             }
         }
         
@@ -296,6 +307,15 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error stopping GPS forwarder", e)
         }
         
+        // Stop FRP tunnel
+        try {
+            frpTunnelManager?.stopTunnel()
+            frpTunnelManager = null
+            Log.i(TAG, "FRP tunnel stopped")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping FRP tunnel", e)
+        }
+        
         // Close USB connection to release device for re-enumeration
         try {
             usbConnection?.close()
@@ -341,7 +361,9 @@ class AisReceiverService : Service() {
             gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
             gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
             hubEnabled = prefs.getBoolean("hub_sharing", false),
-            hubKey = prefs.getString("hub_key", "") ?: ""
+            hubKey = prefs.getString("hub_key", "") ?: "",
+            remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
+            stationName = prefs.getString("pref_station_name", "") ?: ""
         )
     }
 
@@ -427,7 +449,9 @@ data class ServiceConfig(
     val gpsdPort: Int = 2947,
     val gpsdInterval: Int = 10,
     val hubEnabled: Boolean = false,
-    val hubKey: String = ""
+    val hubKey: String = "",
+    val remoteAccessEnabled: Boolean = false,
+    val stationName: String = ""
 )
 
 /**
