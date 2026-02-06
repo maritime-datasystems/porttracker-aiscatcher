@@ -236,28 +236,39 @@ class AisReceiverService : Service() {
                 AisCatcherJava.createWebViewer(config.webViewerPort.toString())
             }
             
-            // Try to create receiver
+            // Try to create receiver (SDR is always attempted if device available)
             Log.i(TAG, "Creating receiver (source=$source, fd=$fd)")
             val result = AisCatcherJava.createReceiver(source, fd, 0, 0, 0)
             
             if (result == 0) {
                 hasDevice = true
-                updateNotification("AIS Receiver running")
+                val statusMsg = if (config.webViewerEnabled) {
+                    "AIS Receiver running (Web: port ${config.webViewerPort})"
+                } else {
+                    "AIS Receiver running"
+                }
+                updateNotification(statusMsg)
                 Log.i(TAG, "Running receiver...")
                 AisCatcherJava.Run() // This blocks until stopped
                 Log.i(TAG, "Receiver stopped")
             } else {
                 hasDevice = false
-                Log.w(TAG, "No SDR device available (result=$result), web interface still running")
-                updateNotification("No SDR device - Web only (port 8080)")
-                
-                // Keep the service alive for web interface even without SDR
-                while (!shouldStop.get()) {
-                    try {
-                        Thread.sleep(1000)
-                    } catch (e: InterruptedException) {
-                        break
+                if (config.webViewerEnabled) {
+                    Log.w(TAG, "No SDR device available (result=$result), web interface running")
+                    updateNotification("No SDR device - Web only (port ${config.webViewerPort})")
+                    
+                    // Keep the service alive for web interface even without SDR
+                    while (!shouldStop.get()) {
+                        try {
+                            Thread.sleep(1000)
+                        } catch (e: InterruptedException) {
+                            break
+                        }
                     }
+                } else {
+                    Log.e(TAG, "No SDR device available and web interface disabled - stopping service")
+                    updateNotification("No SDR device - Service stopping")
+                    // No SDR and no web - nothing to do
                 }
             }
             

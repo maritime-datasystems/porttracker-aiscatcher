@@ -46,7 +46,7 @@
             android:key="webviewer_enabled"
             android:title="Enable Web Viewer"
             android:summary="Web-based map and status"
-            android:defaultValue="true"
+            android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference
