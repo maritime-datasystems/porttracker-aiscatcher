@@ -392,12 +392,15 @@ class SettingsActivity : AppCompatActivity() {
             findPreference<androidx.preference.SwitchPreferenceCompat>("service_enabled")?.apply {
                 isChecked = AisReceiverService.isRunning
                 setOnPreferenceChangeListener { _, newValue ->
+                    android.util.Log.d("ControlFragment", "Switch changed to: $newValue")
                     // Set debounce - don't let status updates override for 3 seconds
                     userInteractingUntil = System.currentTimeMillis() + 3000
                     
                     if (newValue as Boolean) {
+                        android.util.Log.d("ControlFragment", "Calling startService()")
                         startService()
                     } else {
+                        android.util.Log.d("ControlFragment", "Calling stopService()")
                         stopService()
                     }
                     false // Prevent auto-commit, we control the state manually
@@ -599,10 +602,35 @@ class SettingsActivity : AppCompatActivity() {
             webViewerEnabledPref = findPreference("webviewer_enabled")
             localWebPortPref = findPreference("pref_local_web_port")
             
-            // Update local web status when switch changes
+            // Update local web status and start/stop service when switch changes
             webViewerEnabledPref?.setOnPreferenceChangeListener { _, newValue ->
                 val enabled = newValue as Boolean
-                updateLocalWebStatus(enabled, localWebPortPref?.text ?: "8080")
+                val port = localWebPortPref?.text ?: "8080"
+                updateLocalWebStatus(enabled, port)
+                
+                val ctx = context ?: return@setOnPreferenceChangeListener true
+                
+                if (enabled) {
+                    // Start service in web-only mode
+                    if (!AisReceiverService.isRunning) {
+                        Toast.makeText(ctx, "🌐 Starting web server...", Toast.LENGTH_SHORT).show()
+                        try {
+                            val intent = Intent(ctx, AisReceiverService::class.java).apply {
+                                putExtra("USB_VENDOR_ID", 0)
+                                putExtra("USB_PRODUCT_ID", 0)
+                            }
+                            ctx.startForegroundService(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    // Stop web service if running (but only if SDR is also not active)
+                    if (AisReceiverService.isRunning && !AisReceiverService.hasDevice) {
+                        Toast.makeText(ctx, "Stopping web server...", Toast.LENGTH_SHORT).show()
+                        ctx.stopService(Intent(ctx, AisReceiverService::class.java))
+                    }
+                }
                 true
             }
             
