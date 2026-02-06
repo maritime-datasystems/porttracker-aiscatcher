@@ -14,9 +14,10 @@ class FrpTunnelManager(private val context: Context) {
     companion object {
         private const val TAG = "porttracker-service.FRP"
         
-        // FRP server configuration - TODO: Make these configurable
-        private const val FRP_SERVER_ADDR = "frp.porttracker.io"
+        // FRP server configuration
+        private const val FRP_SERVER_ADDR = "connect.porttracker.co"
         private const val FRP_SERVER_PORT = 7000
+        private const val FRP_AUTH_TOKEN = "porttrackerruleztheworld2026"
     }
     
     private var frpProcess: Process? = null
@@ -88,12 +89,13 @@ class FrpTunnelManager(private val context: Context) {
         val configContent = """
             serverAddr = "$FRP_SERVER_ADDR"
             serverPort = $FRP_SERVER_PORT
+            auth.token = "$FRP_AUTH_TOKEN"
             
             [[proxies]]
             name = "$subdomain"
             type = "http"
             localPort = $webPort
-            subdomain = "$subdomain"
+            customDomains = ["$subdomain.connect.porttracker.co"]
         """.trimIndent()
         
         try {
