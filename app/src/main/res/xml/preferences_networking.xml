@@ -28,6 +28,13 @@
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:key="pref_remote_status"
+            android:title="Remote Access URL"
+            android:summary="Not launched"
+            android:selectable="true"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <!-- Local Web Server -->

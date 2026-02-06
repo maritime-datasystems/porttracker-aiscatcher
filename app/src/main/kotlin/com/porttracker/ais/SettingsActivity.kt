@@ -559,6 +559,10 @@ class SettingsActivity : AppCompatActivity() {
 
     // =============== WEB FRAGMENT ===============
     class NetworkingFragment : PreferenceFragmentCompat() {
+        private var remoteStatusPref: Preference? = null
+        private var stationNamePref: androidx.preference.EditTextPreference? = null
+        private var enableRemotePref: androidx.preference.SwitchPreferenceCompat? = null
+        
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_networking, rootKey)
 
@@ -568,10 +572,87 @@ class SettingsActivity : AppCompatActivity() {
             setupEditTextPreferenceSummary("pref_station_name")
             setupEditTextPreferenceSummary("pref_local_web_port")
             
+            // Setup remote access status
+            remoteStatusPref = findPreference("pref_remote_status")
+            stationNamePref = findPreference("pref_station_name")
+            enableRemotePref = findPreference("pref_enable_remote")
+            
+            // Update status when station name changes
+            stationNamePref?.setOnPreferenceChangeListener { pref, newValue ->
+                pref.summary = newValue.toString()
+                updateRemoteStatus(newValue.toString(), enableRemotePref?.isChecked == true)
+                true
+            }
+            
+            // Update status when enable switch changes
+            enableRemotePref?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = newValue as Boolean
+                updateRemoteStatus(stationNamePref?.text ?: "", enabled)
+                true
+            }
+            
+            // Handle click on remote status URL
+            remoteStatusPref?.setOnPreferenceClickListener {
+                val stationName = stationNamePref?.text ?: ""
+                val enabled = enableRemotePref?.isChecked == true
+                
+                if (enabled && stationName.isNotEmpty()) {
+                    val sanitizedName = stationName.lowercase()
+                        .replace(Regex("[^a-z0-9-]"), "-")
+                        .replace(Regex("-+"), "-")
+                        .trim('-')
+                        .take(32)
+                    val url = "http://$sanitizedName.porttracker.co"
+                    
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    startActivity(intent)
+                } else {
+                    Toast.makeText(context, "Remote access is not enabled", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+            
+            // Initial status update
+            updateRemoteStatus(stationNamePref?.text ?: "", enableRemotePref?.isChecked == true)
+            
             findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener {
                 Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
                 // Implementation for diagnostics can be added here
                 true
+            }
+        }
+        
+        private fun updateRemoteStatus(stationName: String, enabled: Boolean) {
+            val sanitizedName = stationName.lowercase()
+                .replace(Regex("[^a-z0-9-]"), "-")
+                .replace(Regex("-+"), "-")
+                .trim('-')
+                .take(32)
+            
+            if (enabled && sanitizedName.isNotEmpty()) {
+                val url = "http://$sanitizedName.porttracker.co"
+                val greenText = android.text.SpannableString(url)
+                greenText.setSpan(
+                    android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#4CAF50")),
+                    0, url.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                greenText.setSpan(
+                    android.text.style.UnderlineSpan(),
+                    0, url.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                remoteStatusPref?.summary = greenText
+                remoteStatusPref?.isEnabled = true
+            } else {
+                val redText = android.text.SpannableString("Not launched")
+                redText.setSpan(
+                    android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#F44336")),
+                    0, redText.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                remoteStatusPref?.summary = redText
+                remoteStatusPref?.isEnabled = false
             }
         }
 
