@@ -205,6 +205,15 @@ class AisReceiverService : Service() {
             }
 
             Log.i(TAG, "Initializing native library...")
+            
+            // Force close first to ensure clean state on restart
+            try {
+                AisCatcherJava.Close()
+                Thread.sleep(500)  // Allow port to be released
+            } catch (e: Exception) {
+                Log.d(TAG, "Pre-init close (expected on first start): ${e.message}")
+            }
+            
             AisCatcherJava.InitNative(config.webServerPort)
             
             // Initialize statistics class - REQUIRED before Run()
