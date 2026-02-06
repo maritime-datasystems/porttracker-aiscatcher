@@ -45,6 +45,14 @@ object UsbDeviceScanner {
     )
     
     /**
+     * Check if a vendor/product ID pair is a supported SDR device
+     */
+    fun isSupportedDevice(vendorId: Int, productId: Int): Boolean {
+        return RTL_SDR_DEVICES.any { it.first == vendorId && it.second == productId } ||
+               AIRSPY_DEVICES.any { it.first == vendorId && it.second == productId }
+    }
+    
+    /**
      * Scan for connected SDR devices
      */
     fun scanForDevices(context: Context): SdrDeviceInfo {

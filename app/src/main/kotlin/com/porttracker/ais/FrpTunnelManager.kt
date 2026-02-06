@@ -38,35 +38,30 @@ class FrpTunnelManager(private val context: Context) {
     }
     
     /**
-     * Copy the frpc binary from assets to the app's filesDir and make it executable.
+     * Get the frpc binary from the native library directory.
+     * The binary is packaged as libfrpc.so in jniLibs for the appropriate ABI.
      * Returns the File object for the binary, or null on failure.
      */
-    private fun copyBinaryFromAssets(): File? {
-        val binaryName = getBinaryName()
-        val targetFile = File(context.filesDir, "frpc")
-        
+    private fun prepareBinary(): File? {
         try {
-            // Check if binary exists in assets
-            val assetList = context.assets.list("") ?: emptyArray()
-            if (!assetList.contains(binaryName)) {
-                Log.e(TAG, "Binary not found in assets: $binaryName")
+            // Get the native library directory - binaries here are allowed to execute
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            val binaryFile = File(nativeLibDir, "libfrpc.so")
+            
+            if (!binaryFile.exists()) {
+                Log.e(TAG, "Binary not found in native lib dir: ${binaryFile.absolutePath}")
                 return null
             }
             
-            // Copy binary
-            context.assets.open(binaryName).use { input ->
-                FileOutputStream(targetFile).use { output ->
-                    input.copyTo(output)
-                }
+            if (!binaryFile.canExecute()) {
+                Log.w(TAG, "Binary not executable, this may fail")
             }
             
-            // Make executable
-            targetFile.setExecutable(true, false)
-            Log.i(TAG, "Binary copied and made executable: ${targetFile.absolutePath}")
-            return targetFile
+            Log.i(TAG, "Binary found: ${binaryFile.absolutePath} (executable=${binaryFile.canExecute()})")
+            return binaryFile
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy binary from assets", e)
+            Log.e(TAG, "Failed to prepare binary", e)
             return null
         }
     }
@@ -87,7 +82,7 @@ class FrpTunnelManager(private val context: Context) {
         val subdomain = if (sanitizedName.isNotEmpty()) sanitizedName else "station-${System.currentTimeMillis()}"
         
         val configContent = """
-            serverAddr = "$FRP_SERVER_ADDR"
+            serverAddr = "5.75.129.207"
             serverPort = $FRP_SERVER_PORT
             auth.token = "$FRP_AUTH_TOKEN"
             
@@ -95,7 +90,7 @@ class FrpTunnelManager(private val context: Context) {
             name = "$subdomain"
             type = "http"
             localPort = $webPort
-            customDomains = ["$subdomain.connect.porttracker.co"]
+            subdomain = "$subdomain"
         """.trimIndent()
         
         try {
@@ -121,7 +116,7 @@ class FrpTunnelManager(private val context: Context) {
             return true
         }
         
-        val binary = copyBinaryFromAssets()
+        val binary = prepareBinary()
         if (binary == null || !binary.exists()) {
             Log.e(TAG, "Failed to prepare frpc binary")
             return false
@@ -147,20 +142,24 @@ class FrpTunnelManager(private val context: Context) {
                     frpProcess = processBuilder.start()
                     isRunning = true
                     Log.i(TAG, "Tunnel started successfully")
+                    InternalLog.log("Tunnel started successfully")
                     
                     // Log output for debugging
                     frpProcess?.inputStream?.bufferedReader()?.use { reader ->
                         reader.forEachLine { line ->
                             Log.d(TAG, "frpc: $line")
+                            InternalLog.log("frpc: $line")
                         }
                     }
                     
                     frpProcess?.waitFor()
                     isRunning = false
                     Log.i(TAG, "Tunnel process exited")
+                    InternalLog.log("Tunnel process exited")
                     
                 } catch (e: Exception) {
                     Log.e(TAG, "Tunnel process error", e)
+                    InternalLog.log("Tunnel process error: ${e.message}")
                     isRunning = false
                 }
             }.start()
@@ -169,6 +168,7 @@ class FrpTunnelManager(private val context: Context) {
             
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start tunnel", e)
+            InternalLog.log("Failed to start tunnel: ${e.message}")
             return false
         }
     }
@@ -177,30 +177,34 @@ class FrpTunnelManager(private val context: Context) {
      * Stop the FRP tunnel.
      */
     fun stopTunnel() {
-        try {
-            frpProcess?.let { process ->
-                Log.i(TAG, "Stopping tunnel...")
-                process.destroy()
-                
-                // Force kill if not stopped after 3 seconds
-                Thread {
-                    try {
-                        Thread.sleep(3000)
-                        if (process.isAlive) {
-                            process.destroyForcibly()
-                            Log.w(TAG, "Tunnel force killed")
-                        }
-                    } catch (e: InterruptedException) {
-                        // Ignore
+                try {
+                    frpProcess?.let { process ->
+                        Log.i(TAG, "Stopping tunnel...")
+                        InternalLog.log("Stopping tunnel...")
+                        process.destroy()
+                        
+                        // Force kill if not stopped after 3 seconds
+                        Thread {
+                            try {
+                                Thread.sleep(3000)
+                                if (process.isAlive) {
+                                    process.destroyForcibly()
+                                    Log.w(TAG, "Tunnel force killed")
+                                    InternalLog.log("Tunnel force killed")
+                                }
+                            } catch (e: InterruptedException) {
+                                // Ignore
+                            }
+                        }.start()
                     }
-                }.start()
-            }
-            frpProcess = null
-            isRunning = false
-            Log.i(TAG, "Tunnel stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping tunnel", e)
-        }
+                    frpProcess = null
+                    isRunning = false
+                    Log.i(TAG, "Tunnel stopped")
+                    InternalLog.log("Tunnel stopped")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping tunnel", e)
+                    InternalLog.log("Error stopping tunnel: ${e.message}")
+                }
     }
     
     /**

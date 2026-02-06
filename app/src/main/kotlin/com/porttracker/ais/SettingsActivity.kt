@@ -50,15 +50,70 @@ class SettingsActivity : AppCompatActivity() {
                 if (!AisReceiverService.isRunning) {
                     // Only start if SDR is connected and has permission
                     val deviceInfo = UsbDeviceScanner.scanForDevices(this)
+                    val webViewerEnabled = prefs.getBoolean("webviewer_enabled", false)
+                    
                     if (deviceInfo.found && deviceInfo.isUsable) {
                         val intent = Intent(this, AisReceiverService::class.java).apply {
                             putExtra("USB_VENDOR_ID", deviceInfo.vendorId)
                             putExtra("USB_PRODUCT_ID", deviceInfo.productId)
                         }
                         startForegroundService(intent)
+                    } else if (webViewerEnabled) {
+                        // Start in web-only mode if enabled
+                        val intent = Intent(this, AisReceiverService::class.java).apply {
+                            putExtra("USB_VENDOR_ID", 0)
+                            putExtra("USB_PRODUCT_ID", 0)
+                        }
+                        startForegroundService(intent)
+                        Toast.makeText(this, "🌐 Starting web server (auto)...", Toast.LENGTH_SHORT).show()
                     }
                 }
             }, 3000)
+        }
+        
+        // Handle USB device attached intent (from "Always open PortTracker" selection)
+        handleUsbIntent(intent)
+    }
+    
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        intent?.let { handleUsbIntent(it) }
+    }
+    
+    private fun handleUsbIntent(intent: Intent) {
+        if (intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            val device = intent.getParcelableExtra<android.hardware.usb.UsbDevice>(android.hardware.usb.UsbManager.EXTRA_DEVICE)
+            if (device != null) {
+                android.util.Log.i("porttracker-activity", "USB device attached via Intent: ${device.productName} (${device.vendorId}:${device.productId})")
+                
+                val usbManager = getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager
+                
+                if (usbManager.hasPermission(device)) {
+                    // We have permission - this means user selected "Always open PortTracker"!
+                    android.util.Log.i("porttracker-activity", "USB permission already granted (persistent)")
+                    Toast.makeText(this, "✅ SDR connected with persistent permission", Toast.LENGTH_SHORT).show()
+                    
+                    // Start the service with this device
+                    if (!AisReceiverService.isRunning) {
+                        val serviceIntent = Intent(this, AisReceiverService::class.java).apply {
+                            putExtra("USB_VENDOR_ID", device.vendorId)
+                            putExtra("USB_PRODUCT_ID", device.productId)
+                        }
+                        startForegroundService(serviceIntent)
+                    }
+                } else {
+                    // Request permission - this time the "Always open" checkbox will be available!
+                    android.util.Log.i("porttracker-activity", "Requesting USB permission with 'Always' option available")
+                    val pendingIntent = android.app.PendingIntent.getBroadcast(
+                        this, 0,
+                        Intent("com.porttracker.ais.USB_PERMISSION").apply {
+                            putExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE, device)
+                        },
+                        android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                    usbManager.requestPermission(device, pendingIntent)
+                }
+            }
         }
     }
     
@@ -351,6 +406,48 @@ class SettingsActivity : AppCompatActivity() {
             setupEditTextPreferenceSummary("tcp_port")
             setupEditTextPreferenceSummary("webviewer_port")
             setupEditTextPreferenceSummary("frequency_correction")
+            
+            // Battery Optimization preference - opens Android settings
+            findPreference<Preference>("battery_optimization")?.setOnPreferenceClickListener {
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // Fallback to app-specific battery settings
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = android.net.Uri.parse("package:${requireContext().packageName}")
+                        }
+                        startActivity(intent)
+                    } catch (e2: Exception) {
+                        android.widget.Toast.makeText(
+                            requireContext(),
+                            "Could not open battery settings. Please disable optimization manually in Settings > Apps > PortTracker.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+                true
+            }
+            
+            // Update battery optimization status
+            updateBatteryOptimizationStatus()
+        }
+        
+        private fun updateBatteryOptimizationStatus() {
+            val pm = requireContext().getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            val isIgnoringBattery = pm.isIgnoringBatteryOptimizations(requireContext().packageName)
+            
+            findPreference<Preference>("battery_optimization")?.summary = if (isIgnoringBattery) {
+                "✅ Battery optimization disabled (recommended for remote stations)"
+            } else {
+                "⚠️ Tap to disable battery optimization (keeps service running)"
+            }
+        }
+        
+        override fun onResume() {
+            super.onResume()
+            updateBatteryOptimizationStatus()
         }
 
         private fun setupEditTextPreferenceSummary(key: String) {
@@ -640,8 +737,8 @@ class SettingsActivity : AppCompatActivity() {
                 updateLocalWebStatus(webViewerEnabledPref?.isChecked == true, newValue.toString())
                 true
             }
-            
-            // Handle click on local web status URL
+
+            // Handle clicks on local web status URL
             localWebStatusPref?.setOnPreferenceClickListener {
                 val enabled = webViewerEnabledPref?.isChecked == true
                 val port = localWebPortPref?.text ?: "8080"
@@ -653,6 +750,27 @@ class SettingsActivity : AppCompatActivity() {
                 } else {
                     Toast.makeText(context, "Local web server is not enabled", Toast.LENGTH_SHORT).show()
                 }
+                true
+            }
+
+            // Show logs
+            findPreference<Preference>("pref_show_debug_logs")?.setOnPreferenceClickListener {
+                val logs = InternalLog.getLogs()
+                androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                    .setTitle("Debug Logs")
+                    .setMessage(if (logs.isEmpty()) "No logs available" else logs)
+                    .setPositiveButton("Close", null)
+                    .setNeutralButton("Clear") { _, _ -> 
+                        InternalLog.clear()
+                        Toast.makeText(context, "Logs cleared", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("Copy") { _, _ ->
+                        val clipboard = requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Debug Logs", logs)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                    .show()
                 true
             }
             
@@ -675,6 +793,20 @@ class SettingsActivity : AppCompatActivity() {
             enableRemotePref?.setOnPreferenceChangeListener { _, newValue ->
                 val enabled = newValue as Boolean
                 updateRemoteStatus(stationNamePref?.text ?: "", enabled)
+                
+                // Trigger service update
+                val intent = Intent(context, AisReceiverService::class.java).apply {
+                    putExtra("REMOTE_ENABLED", enabled)
+                    putExtra("STATION_NAME", stationNamePref?.text ?: "")
+                }
+                context?.startService(intent)
+                
+                if (enabled) {
+                    Toast.makeText(context, "🔄 Initializing Remote Access...", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "🛑 Stopping Remote Access...", Toast.LENGTH_SHORT).show()
+                }
+                
                 true
             }
             
@@ -689,7 +821,8 @@ class SettingsActivity : AppCompatActivity() {
                         .replace(Regex("-+"), "-")
                         .trim('-')
                         .take(32)
-                    val url = "http://$sanitizedName.porttracker.co"
+                    // Ensure we use the correct domain here for the link
+                    val url = "http://$sanitizedName.connect.porttracker.co"
                     
                     val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                     startActivity(intent)
@@ -706,6 +839,16 @@ class SettingsActivity : AppCompatActivity() {
                 Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
                 // Implementation for diagnostics can be added here
                 true
+            }
+        }
+        
+        private fun setupEditTextPreferenceSummary(key: String) {
+            findPreference<androidx.preference.EditTextPreference>(key)?.apply {
+                summary = text ?: ""
+                setOnPreferenceChangeListener { pref, newValue ->
+                    pref.summary = newValue.toString()
+                    true
+                }
             }
         }
         
@@ -745,7 +888,7 @@ class SettingsActivity : AppCompatActivity() {
                 .take(32)
             
             if (enabled && sanitizedName.isNotEmpty()) {
-                val url = "http://$sanitizedName.porttracker.co"
+                val url = "http://$sanitizedName.connect.porttracker.co"
                 val greenText = android.text.SpannableString(url)
                 greenText.setSpan(
                     android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#4CAF50")),
@@ -768,16 +911,6 @@ class SettingsActivity : AppCompatActivity() {
                 )
                 remoteStatusPref?.summary = redText
                 remoteStatusPref?.isEnabled = false
-            }
-        }
-
-        private fun setupEditTextPreferenceSummary(key: String) {
-            findPreference<androidx.preference.EditTextPreference>(key)?.apply {
-                summary = text ?: ""
-                setOnPreferenceChangeListener { pref, newValue ->
-                    pref.summary = newValue.toString()
-                    true
-                }
             }
         }
     }

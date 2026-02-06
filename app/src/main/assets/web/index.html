@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PortTracker AIS</title>
+    <style>
+        :root {
+            --primary-color: #005f73;
+            --secondary-color: #0a9396;
+            --text-color: #333;
+            --bg-color: #f4f4f9;
+            --header-height: 60px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Bootstrap 5 for Settings Page styling -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
+        crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        header {
+            background-color: var(--primary-color);
+            color: white;
+            height: var(--header-height);
+            display: flex;
+            align-items: center;
+            padding: 0 1rem;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            margin: 0;
+            flex-grow: 1;
+        }
+
+        /* Hamburger Menu Icon */
+        .menu-toggle {
+            display: block;
+            cursor: pointer;
+            font-size: 1.5rem;
+            padding: 0.5rem;
+        }
+
+        /* Navigation Menu */
+        nav {
+            position: fixed;
+            top: var(--header-height);
+            left: -250px;
+            width: 250px;
+            height: calc(100vh - var(--header-height));
+            background-color: white;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+            transition: left 0.3s ease;
+            z-index: 999;
+            overflow-y: auto;
+        }
+
+        nav.open {
+            left: 0;
+        }
+
+        nav ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        nav li {
+            border-bottom: 1px solid #eee;
+        }
+
+        nav a {
+            display: block;
+            padding: 1rem;
+            color: var(--text-color);
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+
+        nav a:hover,
+        nav a.active {
+            background-color: var(--secondary-color);
+            color: white;
+        }
+
+        /* Overlay to close menu */
+        .overlay {
+            display: none;
+            position: fixed;
+            top: var(--header-height);
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 998;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+        /* Main Content */
+        main {
+            margin-top: var(--header-height);
+            padding: 1rem;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        section {
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+
+        section.active {
+            display: block;
+        }
+
+        .card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            margin-bottom: 1rem;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 200px;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="menu-toggle" onclick="toggleMenu()">☰</div>
+        <h1 style="margin-left: 1rem;">porttracker-aiscatcher</h1>
+    </header>
+
+    <div class="overlay" onclick="toggleMenu()"></div>
+
+    <nav id="sidebar">
+        <ul>
+            <li><a href="#" onclick="showSection('start', this)" class="active">Start</a></li>
+            <li><a href="#" onclick="showSection('map', this)">Map</a></li>
+            <li><a href="#" onclick="showSection('status', this)">Status</a></li>
+            <li><a href="#" onclick="showSection('stats', this)">Stats</a></li>
+            <li><a href="#" onclick="showSection('settings', this)">Settings</a></li>
+            <li><a href="#" onclick="showSection('control', this)">Control</a></li>
+            <li><a href="#" onclick="showSection('nmea', this)">NMEA</a></li>
+            <li><a href="#" onclick="showSection('logs', this)">Logs</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <section id="start" class="active">
+            <div class="card">
+                <h2>Hello World!</h2>
+                <p>Welcome to <strong>porttracker-aiscatcher</strong>.</p>
+                <p>This is your custom mobile dashboard.</p>
+            </div>
+        </section>
+
+        <section id="map" style="padding: 0; height: calc(100vh - 80px); position: relative;">
+            <div id="leaflet_map" style="width: 100%; height: 100%; border-radius: 8px;"></div>
+        </section>
+
+        <section id="status">
+            <div class="card">
+                <h2>System Status</h2>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">Service</td>
+                        <td id="st_service" style="padding: 8px; font-weight: bold;">Loading...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">App Version</td>
+                        <td id="st_version" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">Local IP</td>
+                        <td id="st_ip" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">Network</td>
+                        <td id="st_net" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">SDR Device</td>
+                        <td id="st_device" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px;">AIS Messages</td>
+                        <td id="st_msg" style="padding: 8px;">...</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="card">
+                <h2>GPS & Heading</h2>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">Status</td>
+                        <td id="st_gps_status" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px;">Location & HDT</td>
+                        <td id="st_gps_loc" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px;">GPS Msgs (1m)</td>
+                        <td id="st_gps_count" style="padding: 8px;">...</td>
+                    </tr>
+                </table>
+            </div>
+        </section>
+
+        <section id="stats">
+            <div class="card">
+                <h2>Message Rate</h2>
+                <h3>Messages per Second</h3>
+                <div class="chart-container"><canvas id="chart_sec"></canvas></div>
+                <h3>Messages per Minute</h3>
+                <div class="chart-container"><canvas id="chart_min"></canvas></div>
+                <h3>Messages per Hour</h3>
+                <div class="chart-container"><canvas id="chart_hour"></canvas></div>
+                <h3>Messages per Day</h3>
+                <div class="chart-container"><canvas id="chart_day"></canvas></div>
+            </div>
+
+            <div class="card">
+                <h2>Vessel Traffic</h2>
+                <h3>Vessels per Minute</h3>
+                <div class="chart-container"><canvas id="chart_vessel_min"></canvas></div>
+            </div>
+
+            <div class="card">
+                <h2>Max Distance</h2>
+                <h3>Max NMI per Hour</h3>
+                <div class="chart-container"><canvas id="chart_dist_hour"></canvas></div>
+                <h3>Max NMI per Day</h3>
+                <div class="chart-container"><canvas id="chart_dist_day"></canvas></div>
+            </div>
+        </section>
+
+        <section id="settings">
+            <div class="card">
+                <h2>Settings</h2>
+                <div id="settings-content">
+                    Loading Settings...
+                </div>
+            </div>
+        </section>
+
+        <section id="control">
+            <div class="card">
+                <h2>Control</h2>
+                <p>Coming Soon...</p>
+            </div>
+        </section>
+
+        <section id="nmea">
+            <div class="card">
+                <h2>NMEA Stream</h2>
+                <div style="margin-bottom: 10px;">
+                    <button onclick="startNmeaStream()"
+                        style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Start
+                        Stream</button>
+                    <button onclick="stopNmeaStream()"
+                        style="padding: 8px 16px; background: #F44336; color: white; border: none; border-radius: 4px; cursor: pointer;">Stop
+                        Stream</button>
+                    <span id="nmea_status" style="margin-left: 10px; color: #666;">Stopped</span>
+                </div>
+                <textarea id="nmea_output"
+                    style="width: 100%; height: 300px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical;"
+                    readonly></textarea>
+                <div>
+                    <input type="checkbox" id="auto_scroll" checked> <label for="auto_scroll">Auto-scroll</label>
+                    <button onclick="document.getElementById('nmea_output').value=''"
+                        style="float: right; padding: 4px 8px;">Clear</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="logs">
+            <div class="card">
+                <h2>Logs</h2>
+                <p>Coming Soon...</p>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // --- Status Logic ---
+        let statusTimer = null;
+
+        function toggleMenu() {
+            document.getElementById('sidebar').classList.toggle('open');
+            document.querySelector('.overlay').classList.toggle('active');
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/admin/api/status_ui');
+                const data = await res.json();
+
+                // Safety checks
+                if (!document.getElementById('st_service')) return;
+
+                document.getElementById('st_service').innerText = data.service_status;
+                document.getElementById('st_service').style.color = data.service_status.includes("Running") ? "green" : "red";
+
+                document.getElementById('st_version').innerText = data.app_version;
+                document.getElementById('st_ip').innerText = data.local_ip;
+                document.getElementById('st_net').innerText = data.network_status;
+                document.getElementById('st_device').innerText = data.device_status;
+                document.getElementById('st_msg').innerText = data.msg_count;
+
+                document.getElementById('st_gps_status').innerText = data.gps_status;
+                document.getElementById('st_gps_loc').innerText = data.gps_coordinates;
+                document.getElementById('st_gps_count').innerText = data.gps_msg_count;
+
+            } catch (e) {
+                console.error("Status fetch error", e);
+            }
+        }
+
+        // --- Map Logic ---
+        let map = null;
+        let markers = {};
+        let mapInitialized = false;
+        let pollTimer = null;
+
+        function getShipIcon(heading) {
+            const rot = heading || 0;
+            return L.divIcon({
+                className: 'ship-icon',
+                html: `<svg width="24" height="24" viewBox="0 0 24 24" style="transform: rotate(${rot}deg); filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));">
+                        <path d="M12 2L2 22L12 18L22 22L12 2Z" fill="#005f73" stroke="white" stroke-width="2"/>
+                       </svg>`,
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+        }
+
+        function initMap() {
+            if (mapInitialized) return;
+
+            map = L.map('leaflet_map').setView([51.505, -0.09], 10); // Standard default
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            mapInitialized = true;
+            pollShips();
+            if (!pollTimer) pollTimer = setInterval(pollShips, 3000);
+
+            setTimeout(() => { map.invalidateSize(); }, 500);
+        }
+
+        function pollShips() {
+            if (!document.getElementById('map') || !document.getElementById('map').classList.contains('active')) return;
+
+            fetch('/api/ships_array.json')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.values) updateMapMarkers(data.values);
+                })
+                .catch(err => console.error("Error fetching ships:", err));
+        }
+
+        const shipKeys = [
+            "mmsi", "lat", "lon", "distance", "bearing", "level", "count", "ppm", "approx", "heading",
+            "cog", "speed", "to_bow", "to_stern", "to_starboard", "to_port", "last_group", "group_mask",
+            "shiptype", "mmsi_type", "shipclass", "msg_type", "country", "status", "draught", "eta_month",
+            "eta_day", "eta_hour", "eta_minute", "imo", "callsign", "shipname", "destination", "last_signal",
+            "flags", "validated", "channels", "altitude", "received_stations"
+        ];
+
+        function updateMapMarkers(shipRows) {
+            const currentMmsis = new Set();
+            if (!shipRows) return;
+
+            let firstShip = true;
+
+            shipRows.forEach(row => {
+                // Map array to object
+                const ship = {};
+                row.forEach((val, idx) => {
+                    if (idx < shipKeys.length) ship[shipKeys[idx]] = val;
+                });
+
+                const mmsi = ship.mmsi;
+                const lat = ship.lat;
+                const lon = ship.lon;
+                const heading = ship.heading || 0; // "heading", not "hdg"
+                const name = ship.shipname || "Unknown";
+
+                if (!lat || !lon) return;
+
+                currentMmsis.add(mmsi);
+
+                if (markers[mmsi]) {
+                    markers[mmsi].setLatLng([lat, lon]);
+                    markers[mmsi].setIcon(getShipIcon(heading));
+                    markers[mmsi].setPopupContent(`<b>${name}</b><br>MMSI: ${mmsi}<br>Speed: ${ship.speed} kn`);
+                } else {
+                    const marker = L.marker([lat, lon], {
+                        icon: getShipIcon(heading)
+                    }).addTo(map)
+                        .bindPopup(`<b>${name}</b><br>MMSI: ${mmsi}<br>Speed: ${ship.speed} kn`);
+
+                    markers[mmsi] = marker;
+                }
+
+                // Auto Center on first ship if not moved yet
+                if (firstShip && map.getZoom() === 10 && map.getCenter().lat === 51.505) {
+                    map.setView([lat, lon], 12);
+                }
+                firstShip = false;
+            });
+
+            for (let mmsi in markers) {
+                if (!currentMmsis.has(parseInt(mmsi))) {
+                    map.removeLayer(markers[mmsi]);
+                    delete markers[mmsi];
+                }
+            }
+        }
+
+        // --- NMEA Logic ---
+        let nmeaEventSource = null;
+
+        function startNmeaStream() {
+            if (nmeaEventSource) return;
+
+            const statusEl = document.getElementById('nmea_status');
+            statusEl.innerText = "Connecting...";
+            statusEl.style.color = "orange";
+
+            fetch('/api/sse')
+                .then(response => {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder("utf-8");
+                    statusEl.innerText = "Streaming (Connected)";
+                    statusEl.style.color = "green";
+                    console.log("Stream: Connected");
+
+                    function readStream() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                console.log("Stream: Complete");
+                                statusEl.innerText = "Disconnected";
+                                statusEl.style.color = "red";
+                                return;
+                            }
+
+                            const chunk = decoder.decode(value, { stream: true });
+                            // console.log("Stream: Received Chunk", chunk.length);
+
+                            // Simple SSE Parser
+                            const lines = chunk.split('\n');
+                            lines.forEach(line => {
+                                // console.log("Stream Line:", line);
+                                if (line.startsWith("data:")) {
+                                    const data = line.substring(5).trim();
+                                    // console.log("Stream Data:", data);
+                                    if (data) {
+                                        const textarea = document.getElementById('nmea_output');
+                                        textarea.value += data + "\n";
+
+                                        if (textarea.value.length > 50000) {
+                                            textarea.value = textarea.value.substring(textarea.value.length - 20000);
+                                        }
+
+                                        if (document.getElementById('auto_scroll').checked) {
+                                            textarea.scrollTop = textarea.scrollHeight;
+                                        }
+                                    }
+                                }
+                            });
+
+                            readStream();
+                        }).catch(error => {
+                            console.error("Stream: Error reading", error);
+                            statusEl.innerText = "Error - Retrying...";
+                            statusEl.style.color = "orange";
+                            setTimeout(startNmeaStream, 2000); // Retry
+                        });
+                    }
+                    readStream();
+                })
+                .catch(error => {
+                    console.error("Stream: Connection failed", error);
+                    statusEl.innerText = "Connection Failed";
+                    statusEl.style.color = "red";
+                });
+        }
+
+        function stopNmeaStream() {
+            if (nmeaEventSource) {
+                nmeaEventSource.close();
+                nmeaEventSource = null;
+                const statusEl = document.getElementById('nmea_status');
+                statusEl.innerText = "Stopped";
+                statusEl.style.color = "#666";
+            }
+        }
+
+        // --- Navigation Logic ---
+        function showSection(id, link) {
+            document.querySelectorAll('main section').forEach(sec => sec.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+
+            document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+            if (link) link.classList.add('active');
+
+            if (window.innerWidth <= 768) {
+                document.getElementById('sidebar').classList.remove('open');
+                document.querySelector('.overlay').classList.remove('active');
+            }
+
+            // Map Init
+            if (id === 'map') {
+                if (!mapInitialized) {
+                    setTimeout(initMap, 100);
+                } else {
+                    setTimeout(() => { map.invalidateSize(); }, 100);
+                }
+            }
+
+            // Status Page Hooks
+            if (id === 'status' && !statusTimer) {
+                fetchStatus();
+                statusTimer = setInterval(fetchStatus, 2000);
+            } else if (id !== 'status' && statusTimer) {
+                clearInterval(statusTimer);
+                statusTimer = null;
+            }
+
+            // Stats Init
+            if (id === 'stats') {
+                initStats();
+            }
+
+            // Settings Init
+            if (id === 'settings' && window.SettingsRenderer) {
+                SettingsRenderer.init();
+            }
+        }
+
+        // --- Stats Logic ---
+        let charts = {};
+
+        async function initStats() {
+            if (Object.keys(charts).length > 0) {
+                updateStats();
+                return;
+            }
+
+            try {
+                // Initialize empty charts first
+                createChart('chart_sec', 'Messages/Sec', '#4BC0C0');
+                createChart('chart_min', 'Messages/Min', '#36A2EB');
+                createChart('chart_hour', 'Messages/Hour', '#FFCE56');
+                createChart('chart_day', 'Messages/Day', '#FF6384');
+
+                createChart('chart_vessel_min', 'Vessels/Min', '#9966FF');
+
+                createChart('chart_dist_hour', 'Max Distance (NMI)/Hour', '#FF9F40');
+                createChart('chart_dist_day', 'Max Distance (NMI)/Day', '#FF6384');
+
+                updateStats();
+            } catch (e) { console.error("Stats Init Error", e); }
+        }
+
+        function createChart(id, label, color) {
+            const ctx = document.getElementById(id).getContext('2d');
+            charts[id] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: label,
+                        data: [],
+                        borderColor: color,
+                        backgroundColor: color + '33', // faint fill
+                        borderWidth: 2,
+                        tension: 0.1,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true }
+                    },
+                    animation: false
+                }
+            });
+        }
+
+        async function updateStats() {
+            try {
+                const res = await fetch('/api/history_full.json');
+                const data = await res.json();
+
+                updateChartData('chart_sec', data.second.time, data.second.stat, 'count');
+                updateChartData('chart_min', data.minute.time, data.minute.stat, 'count');
+                updateChartData('chart_hour', data.hour.time, data.hour.stat, 'count');
+                updateChartData('chart_day', data.day.time, data.day.stat, 'count');
+
+                updateChartData('chart_vessel_min', data.minute.time, data.minute.stat, 'vessels');
+
+                updateChartData('chart_dist_hour', data.hour.time, data.hour.stat, 'dist');
+                updateChartData('chart_dist_day', data.day.time, data.day.stat, 'dist');
+
+            } catch (e) { console.error("Stats Update Error", e); }
+        }
+
+        function updateChartData(id, times, stats, field) {
+            if (!charts[id]) return;
+
+            // Map data
+            // Times are relative offsets? If so, we might want to just show them as is or index
+            // The legacy code maps them. For simplicity, we'll just use the array index or the raw time value labels
+            // Reversing logic might be needed if time[0] is newest.
+            // Usually history_full.json time[0] is "now" or "newest".
+
+            // Let's check typical ordering. If time is [-1, -2], it's past.
+            // We want chronological order (left to right).
+            // So we should likely reverse the arrays for display if index 0 is newest.
+
+            // Creating deep copy to reverse without mutating original if needed
+            const labels = [...times].reverse();
+            const values = [...stats].map(s => s[field] === null ? 0 : s[field]).reverse();
+
+            charts[id].data.labels = labels;
+            charts[id].data.datasets[0].data = values;
+            charts[id].update();
+        }
+    </script>
+    <script src="settings_renderer.js"></script>
+</body>
+
+</html>

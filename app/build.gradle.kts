@@ -68,4 +68,5 @@ dependencies {
     implementation("androidx.preference:preference-ktx:1.2.1")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 }

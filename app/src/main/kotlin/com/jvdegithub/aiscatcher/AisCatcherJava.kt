@@ -75,7 +75,7 @@ object AisCatcherJava {
     
     // Native methods
     @JvmStatic
-    external fun InitNative(webServerPort: Int): Int
+    external fun InitNative(webServerPort: Int, bindAddress: String): Int
     
     @JvmStatic
     external fun isStreaming(): Boolean

@@ -26,6 +26,9 @@ class AisReceiverService : Service() {
         private const val TAG = "porttracker-service"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "ais_receiver_channel"
+        
+        // Single lock to prevent concurrent native execution across service restarts
+        private val serviceLock = java.util.concurrent.locks.ReentrantLock()
 
         // Callbacks from native code (called via AisCatcherJava bridge)
         @JvmStatic fun onNMEA(nmea: String) {
@@ -79,14 +82,51 @@ class AisReceiverService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var receiverThread: Thread? = null
     private val shouldStop = AtomicBoolean(false)
+    private val restartRequested = AtomicBoolean(false)
     private var fileDescriptor: Int = -1
+    private var currentSource: Int = 0
     private var gpsForwarder: GpsForwarder? = null
     private var frpTunnelManager: FrpTunnelManager? = null
+    private var adminWebServer: AdminWebServer? = null
     private val startLock = Object()  // Prevent concurrent starts
+    
+    private val INTERNAL_WEB_PORT = 8888
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        extractWebAssets()
+    }
+    
+    private fun extractWebAssets() {
+        try {
+            val assetManager = assets
+            val filesList = assetManager.list("web") ?: return
+            
+            val webDir = java.io.File(filesDir, "web")
+            if (!webDir.exists()) webDir.mkdirs()
+            
+            for (filename in filesList) {
+                try {
+                    val inStream = assetManager.open("web/$filename")
+                    val outFile = java.io.File(webDir, filename)
+                    val outStream = java.io.FileOutputStream(outFile)
+                    
+                    val buffer = ByteArray(1024)
+                    var read: Int
+                    while (inStream.read(buffer).also { read = it } != -1) {
+                        outStream.write(buffer, 0, read)
+                    }
+                    inStream.close()
+                    outStream.close()
+                    Log.i(TAG, "Extracted web asset: $filename")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to extract web asset: $filename", e)
+                }
+            }
+        } catch (e: Exception) {
+             Log.e(TAG, "Failed to list web assets", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -101,7 +141,8 @@ class AisReceiverService : Service() {
         
         // Get configuration from intent or preferences
         val config = loadConfig()
-        val source = intent?.getIntExtra("SOURCE", config.deviceType.ordinal) ?: config.deviceType.ordinal
+        currentSource = intent?.getIntExtra("SOURCE", config.deviceType.ordinal) ?: config.deviceType.ordinal
+        
         
         // Open USB device - try intent first, then scan for SDR
         var vendorId = intent?.getIntExtra("USB_VENDOR_ID", -1) ?: -1
@@ -139,7 +180,7 @@ class AisReceiverService : Service() {
         // Start receiver in background thread
         shouldStop.set(false)
         receiverThread = Thread {
-            runReceiver(config, source, fileDescriptor)
+            runServiceLoop()
         }.apply {
             name = "AIS-Receiver-Thread"
             start()
@@ -155,13 +196,56 @@ class AisReceiverService : Service() {
             }
         }
         
-        // Start FRP tunnel for remote access if enabled
-        if (config.remoteAccessEnabled && config.stationName.isNotEmpty()) {
-            frpTunnelManager = FrpTunnelManager(this)
-            if (frpTunnelManager?.startTunnel(config.stationName, config.webViewerPort) == true) {
-                Log.i(TAG, "FRP tunnel started for station: ${config.stationName}")
+        // Check for Intent extras overrides (to handle race condition with SharedPreferences update)
+        if (intent?.hasExtra("REMOTE_ENABLED") == true) {
+            val overrideEnabled = intent.getBooleanExtra("REMOTE_ENABLED", false)
+            val overrideName = intent.getStringExtra("STATION_NAME") ?: config.stationName
+            Log.i(TAG, "Override config from intent: remote=$overrideEnabled, station='$overrideName'")
+            
+            // Create a copy of config with overrides (using data class copy)
+            // Note: Since config is immutable, we just use local variables for logic below
+            // Ideally we should update the config object, but here we just govern the logic
+            
+            // Start/Stop FRP tunnel based on OVERRIDE
+            if (frpTunnelManager == null) {
+                frpTunnelManager = FrpTunnelManager(this)
+            }
+            
+            if (overrideEnabled && overrideName.isNotEmpty()) {
+                if (frpTunnelManager?.isRunning() != true) {
+                    Log.i(TAG, "Starting FRP tunnel (Override) for $overrideName...")
+                    if (frpTunnelManager?.startTunnel(overrideName, config.webViewerPort) == true) {
+                        Log.i(TAG, "FRP tunnel started")
+                    }
+                }
             } else {
-                Log.w(TAG, "FRP tunnel failed to start")
+                if (frpTunnelManager?.isRunning() == true) {
+                    Log.i(TAG, "Stopping FRP tunnel (Override)")
+                    frpTunnelManager?.stopTunnel()
+                }
+            }
+        } else {
+            // Standard Start/Stop based on SharedPreferences Config
+            Log.i(TAG, "FRP config: remoteEnabled=${config.remoteAccessEnabled}, stationName='${config.stationName}'")
+            
+            if (frpTunnelManager == null) {
+                frpTunnelManager = FrpTunnelManager(this)
+            }
+            
+            if (config.remoteAccessEnabled && config.stationName.isNotEmpty()) {
+                if (frpTunnelManager?.isRunning() != true) {
+                    Log.i(TAG, "Starting FRP tunnel for ${config.stationName}...")
+                    if (frpTunnelManager?.startTunnel(config.stationName, config.webViewerPort) == true) {
+                        Log.i(TAG, "FRP tunnel started for station: ${config.stationName}")
+                    } else {
+                        Log.w(TAG, "FRP tunnel failed to start")
+                    }
+                }
+            } else {
+                if (frpTunnelManager?.isRunning() == true) {
+                    Log.i(TAG, "Stopping FRP tunnel (disabled)")
+                    frpTunnelManager?.stopTunnel()
+                }
             }
         }
         
@@ -194,7 +278,104 @@ class AisReceiverService : Service() {
         return -1
     }
 
-    private fun runReceiver(config: ServiceConfig, source: Int, fd: Int) {
+    fun triggerEngineRestart() {
+        Log.i(TAG, "Triggering engine restart via Admin API...")
+        restartRequested.set(true)
+        try {
+            AisCatcherJava.forceStop()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error forcing stop for restart", e)
+        }
+    }
+
+    private fun runServiceLoop() {
+        Log.i(TAG, "Service Loop Started")
+        
+        try {
+            // Only run ONCE per process - no retry loop for native engine
+            // If the native engine crashes/disconnects, we restart the whole service
+            serviceLock.lock()
+            try {
+                restartRequested.set(false)
+                
+                // Reload config fresh
+                val config = loadConfig()
+                
+                // Manage Admin Web Server
+                if (config.webViewerEnabled) {
+                     if (adminWebServer == null) {
+                         Log.i(TAG, "Starting Admin Web Server on port ${config.webViewerPort}...")
+                         adminWebServer = AdminWebServer(this, config.webViewerPort, INTERNAL_WEB_PORT)
+                         adminWebServer?.start()
+                     }
+                } else {
+                    adminWebServer?.stop()
+                    adminWebServer = null
+                }
+                
+                Log.i(TAG, "Starting Native Engine...")
+                isRunning = true
+                runNativeEngine(config, currentSource, fileDescriptor)
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in Service Loop", e)
+            } finally {
+                serviceLock.unlock()
+            }
+            
+            // Engine exited - decide what to do
+            if (shouldStop.get()) {
+                Log.i(TAG, "Service loop exiting (stopped by user)")
+                return
+            }
+            
+            if (restartRequested.get()) {
+                Log.i(TAG, "Engine restart requested (config change)")
+                scheduleServiceRestart(2000)
+                return
+            }
+            
+            // Unexpected exit (USB disconnect, crash, etc.)
+            // Schedule a full service restart in a new process
+            Log.w(TAG, "Engine exited unexpectedly. Scheduling service restart in 5s...")
+            scheduleServiceRestart(5000)
+            
+        } finally {
+            isRunning = false
+            Log.i(TAG, "Service Loop Ended")
+        }
+    }
+    
+    /**
+     * Schedule a full service restart. This creates a clean native library state
+     * by stopping the current service and starting a new one after a delay.
+     * This avoids the SIGSEGV that occurs when re-calling InitNative in the same process.
+     */
+    private fun scheduleServiceRestart(delayMs: Long) {
+        Log.i(TAG, "Scheduling service restart in ${delayMs}ms...")
+        
+        val restartIntent = Intent(this, AisReceiverService::class.java).apply {
+            putExtra("USB_VENDOR_ID", 0)   // Will be re-scanned
+            putExtra("USB_PRODUCT_ID", 0)  // Will be re-scanned
+        }
+        
+        val pendingIntent = android.app.PendingIntent.getForegroundService(
+            this, 42, restartIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        alarmManager.setExactAndAllowWhileIdle(
+            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            android.os.SystemClock.elapsedRealtime() + delayMs,
+            pendingIntent
+        )
+        
+        // Stop this service (kills the process, freeing native resources)
+        stopSelf()
+    }
+
+    private fun runNativeEngine(config: ServiceConfig, source: Int, fd: Int) {
         try {
             if (!AisCatcherJava.isLibraryLoaded) {
                 val error = "Native library not loaded - cannot start receiver"
@@ -214,7 +395,7 @@ class AisReceiverService : Service() {
                 Log.d(TAG, "Pre-init close (expected on first start): ${e.message}")
             }
             
-            AisCatcherJava.InitNative(config.webServerPort)
+            AisCatcherJava.InitNative(INTERNAL_WEB_PORT, "127.0.0.1")
             
             // Initialize statistics class - REQUIRED before Run()
             Log.i(TAG, "Initializing statistics...")
@@ -239,10 +420,12 @@ class AisReceiverService : Service() {
                 AisCatcherJava.createSharing(true, config.hubKey)
             }
             
-            // Start web viewer
+            // Start web viewer (Internal C++ Server)
             if (config.webViewerEnabled) {
-                Log.i(TAG, "Creating WebViewer on port ${config.webViewerPort}")
-                AisCatcherJava.createWebViewer(config.webViewerPort.toString())
+                Log.i(TAG, "Creating Internal WebViewer on port $INTERNAL_WEB_PORT")
+                AisCatcherJava.createWebViewer(INTERNAL_WEB_PORT.toString())
+                
+                // External Admin/Proxy Server is managed in runServiceLoop
             }
             
             // Try to create receiver (SDR is always attempted if device available)
@@ -270,7 +453,7 @@ class AisReceiverService : Service() {
                     // Do NOT call Run() here - it crashes (SIGSEGV) without a valid SDR device
                     // Just keep the service alive so the web server can continue serving
                     Log.i(TAG, "Starting in web-only mode (keep-alive loop)...")
-                    while (!shouldStop.get()) {
+                    while (!shouldStop.get() && !restartRequested.get()) {
                         try {
                             Thread.sleep(1000)
                         } catch (e: InterruptedException) {
@@ -284,7 +467,6 @@ class AisReceiverService : Service() {
                     // No SDR and no web - nothing to do
                 }
             }
-            
         } catch (t: Throwable) {
             Log.e(TAG, "Receiver fatal error", t)
             updateNotification("Error: ${t.message}")
@@ -299,7 +481,7 @@ class AisReceiverService : Service() {
                     Log.e(TAG, "Error closing receiver", e)
                 }
             }
-            isRunning = false
+            // isRunning = false  <- MOVED to runServiceLoop
         }
     }
 
@@ -338,6 +520,15 @@ class AisReceiverService : Service() {
             Log.i(TAG, "FRP tunnel stopped")
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping FRP tunnel", e)
+        }
+        
+        // Stop Admin Web Server
+        try {
+            adminWebServer?.stop()
+            adminWebServer = null
+            Log.i(TAG, "Admin Web Server stopped")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping Admin Web Server", e)
         }
         
         // Close USB connection to release device for re-enumeration

@@ -67,6 +67,38 @@
 
     </PreferenceCategory>
 
+    <!-- Web Authentication -->
+    <PreferenceCategory
+        android:title="Web Authentication"
+        android:dependency="webviewer_enabled"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="web_auth_enabled"
+            android:title="Require Password"
+            android:summary="Protect web interface with username/password"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="web_auth_username"
+            android:title="Username"
+            android:summary="Enter username"
+            android:defaultValue="admin"
+            android:dependency="web_auth_enabled"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="web_auth_password"
+            android:title="Password"
+            android:summary="Enter password"
+            android:defaultValue="admin"
+            android:inputType="textPassword"
+            android:dependency="web_auth_enabled"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
     <!-- DNS Settings -->
     <PreferenceCategory
         android:title="DNS Configuration"
@@ -106,6 +138,12 @@
             android:key="net_diagnostics"
             android:title="Network Diagnostics"
             android:summary="Tap to run network tests"
+            app:iconSpaceReserved="false" />
+            
+        <Preference
+            android:key="pref_show_debug_logs"
+            android:title="Show Debug Logs"
+            android:summary="View internal application logs"
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
