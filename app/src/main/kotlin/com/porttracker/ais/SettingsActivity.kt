@@ -469,9 +469,29 @@ class SettingsActivity : AppCompatActivity() {
             
             // Check if SDR device is available and has permission
             val deviceInfo = UsbDeviceScanner.scanForDevices(ctx)
+            
+            // If no SDR device, check if web viewer is enabled (allow web-only mode)
             if (!deviceInfo.found) {
-                Toast.makeText(ctx, "❌ No SDR device connected", Toast.LENGTH_SHORT).show()
-                return
+                val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+                val webEnabled = prefs.getBoolean("webviewer_enabled", false)
+                
+                if (webEnabled) {
+                    // Start service in web-only mode (no SDR)
+                    Toast.makeText(ctx, "🌐 Starting in web-only mode...", Toast.LENGTH_SHORT).show()
+                    try {
+                        val intent = Intent(ctx, AisReceiverService::class.java).apply {
+                            putExtra("USB_VENDOR_ID", 0)
+                            putExtra("USB_PRODUCT_ID", 0)
+                        }
+                        ctx.startForegroundService(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(ctx, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    return
+                } else {
+                    Toast.makeText(ctx, "❌ No SDR device. Enable Web Viewer for web-only mode.", Toast.LENGTH_LONG).show()
+                    return
+                }
             }
             
             if (!deviceInfo.isUsable) {
