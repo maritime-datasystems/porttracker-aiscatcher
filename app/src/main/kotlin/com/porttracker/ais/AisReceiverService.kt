@@ -257,14 +257,10 @@ class AisReceiverService : Service() {
                     Log.w(TAG, "No SDR device available (result=$result), web interface running")
                     updateNotification("No SDR device - Web only (port ${config.webViewerPort})")
                     
-                    // Keep the service alive for web interface even without SDR
-                    while (!shouldStop.get()) {
-                        try {
-                            Thread.sleep(1000)
-                        } catch (e: InterruptedException) {
-                            break
-                        }
-                    }
+                    // Run the native event loop for web server even without SDR
+                    Log.i(TAG, "Starting in web-only mode...")
+                    AisCatcherJava.Run() // This blocks until stopped - serves web requests
+                    Log.i(TAG, "Web-only mode stopped")
                 } else {
                     Log.e(TAG, "No SDR device available and web interface disabled - stopping service")
                     updateNotification("No SDR device - Service stopping")
