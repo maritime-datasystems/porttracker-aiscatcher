@@ -2,30 +2,9 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <!-- Community Hub (aiscatcher.org) -->
+    <!-- Remote Access -->
     <PreferenceCategory
-        android:title="Community Hub"
-        app:iconSpaceReserved="false">
-
-        <SwitchPreferenceCompat
-            android:key="hub_sharing"
-            android:title="Feed Community Hub"
-            android:summary="Share your AIS data with aiscatcher.org"
-            android:defaultValue="false"
-            app:iconSpaceReserved="false" />
-
-        <EditTextPreference
-            android:key="hub_key"
-            android:title="Sharing Key"
-            android:summary="Enter your UUID from aiscatcher.org"
-            android:dependency="hub_sharing"
-            app:iconSpaceReserved="false" />
-
-    </PreferenceCategory>
-
-    <!-- External Web Portal / Remote Access -->
-    <PreferenceCategory
-        android:title="External Web Portal"
+        android:title="Remote Access"
         app:iconSpaceReserved="false">
 
         <EditTextPreference
@@ -44,9 +23,24 @@
 
         <SwitchPreferenceCompat
             android:key="pref_enable_remote"
-            android:title="Enable External Web Portal / Access"
+            android:title="Enable Remote Access"
             android:summary="Create a tunnel for remote access to web interface"
             android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Local Web Server -->
+    <PreferenceCategory
+        android:title="Local Web Server"
+        app:iconSpaceReserved="false">
+
+        <EditTextPreference
+            android:key="pref_local_web_port"
+            android:title="Local Web Port"
+            android:summary="8080"
+            android:defaultValue="8080"
+            android:inputType="number"
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>

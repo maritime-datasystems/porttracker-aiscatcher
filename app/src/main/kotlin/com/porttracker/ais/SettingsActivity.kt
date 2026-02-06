@@ -30,7 +30,7 @@ class SettingsActivity : AppCompatActivity() {
                 0 -> "Status"
                 1 -> "Settings"
                 2 -> "Control"
-                3 -> "Networking"
+                3 -> "Web"
                 else -> ""
             }
         }.attach()
@@ -557,16 +557,16 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    // =============== NETWORKING FRAGMENT ===============
+    // =============== WEB FRAGMENT ===============
     class NetworkingFragment : PreferenceFragmentCompat() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_networking, rootKey)
 
-            setupEditTextPreferenceSummary("hub_key")
             setupEditTextPreferenceSummary("dns_primary")
             setupEditTextPreferenceSummary("dns_secondary")
             setupEditTextPreferenceSummary("pref_porttracker_username")
             setupEditTextPreferenceSummary("pref_station_name")
+            setupEditTextPreferenceSummary("pref_local_web_port")
             
             findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener {
                 Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
