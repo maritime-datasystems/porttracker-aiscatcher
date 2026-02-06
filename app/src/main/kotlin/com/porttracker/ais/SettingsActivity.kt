@@ -565,6 +565,7 @@ class SettingsActivity : AppCompatActivity() {
             setupEditTextPreferenceSummary("hub_key")
             setupEditTextPreferenceSummary("dns_primary")
             setupEditTextPreferenceSummary("dns_secondary")
+            setupEditTextPreferenceSummary("pref_porttracker_username")
             setupEditTextPreferenceSummary("pref_station_name")
             
             findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener {
