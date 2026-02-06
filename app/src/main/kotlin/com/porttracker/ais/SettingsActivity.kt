@@ -563,6 +563,9 @@ class SettingsActivity : AppCompatActivity() {
         private var remoteStatusPref: Preference? = null
         private var stationNamePref: androidx.preference.EditTextPreference? = null
         private var enableRemotePref: androidx.preference.SwitchPreferenceCompat? = null
+        private var localWebStatusPref: Preference? = null
+        private var webViewerEnabledPref: androidx.preference.SwitchPreferenceCompat? = null
+        private var localWebPortPref: androidx.preference.EditTextPreference? = null
         
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_networking, rootKey)
@@ -572,6 +575,43 @@ class SettingsActivity : AppCompatActivity() {
             setupEditTextPreferenceSummary("pref_porttracker_username")
             setupEditTextPreferenceSummary("pref_station_name")
             setupEditTextPreferenceSummary("pref_local_web_port")
+            
+            // Setup local web status
+            localWebStatusPref = findPreference("pref_local_web_status")
+            webViewerEnabledPref = findPreference("webviewer_enabled")
+            localWebPortPref = findPreference("pref_local_web_port")
+            
+            // Update local web status when switch changes
+            webViewerEnabledPref?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = newValue as Boolean
+                updateLocalWebStatus(enabled, localWebPortPref?.text ?: "8080")
+                true
+            }
+            
+            // Update local web status when port changes
+            localWebPortPref?.setOnPreferenceChangeListener { pref, newValue ->
+                pref.summary = newValue.toString()
+                updateLocalWebStatus(webViewerEnabledPref?.isChecked == true, newValue.toString())
+                true
+            }
+            
+            // Handle click on local web status URL
+            localWebStatusPref?.setOnPreferenceClickListener {
+                val enabled = webViewerEnabledPref?.isChecked == true
+                val port = localWebPortPref?.text ?: "8080"
+                
+                if (enabled) {
+                    val url = "http://localhost:$port"
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    startActivity(intent)
+                } else {
+                    Toast.makeText(context, "Local web server is not enabled", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+            
+            // Initial local web status
+            updateLocalWebStatus(webViewerEnabledPref?.isChecked == true, localWebPortPref?.text ?: "8080")
             
             // Setup remote access status
             remoteStatusPref = findPreference("pref_remote_status")
@@ -620,6 +660,34 @@ class SettingsActivity : AppCompatActivity() {
                 Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
                 // Implementation for diagnostics can be added here
                 true
+            }
+        }
+        
+        private fun updateLocalWebStatus(enabled: Boolean, port: String) {
+            if (enabled) {
+                val url = "http://localhost:$port"
+                val greenText = android.text.SpannableString(url)
+                greenText.setSpan(
+                    android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#4CAF50")),
+                    0, url.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                greenText.setSpan(
+                    android.text.style.UnderlineSpan(),
+                    0, url.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                localWebStatusPref?.summary = greenText
+                localWebStatusPref?.isEnabled = true
+            } else {
+                val redText = android.text.SpannableString("Not launched")
+                redText.setSpan(
+                    android.text.style.ForegroundColorSpan(android.graphics.Color.parseColor("#F44336")),
+                    0, redText.length,
+                    android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                localWebStatusPref?.summary = redText
+                localWebStatusPref?.isEnabled = false
             }
         }
         

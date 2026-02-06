@@ -58,6 +58,13 @@
             android:dependency="webviewer_enabled"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:key="pref_local_web_status"
+            android:title="Local Web URL"
+            android:summary="Not launched"
+            android:selectable="true"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <!-- DNS Settings -->
