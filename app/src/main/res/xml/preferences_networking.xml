@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- Community Hub (aiscatcher.org) -->
+    <PreferenceCategory
+        android:title="Community Hub"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="hub_sharing"
+            android:title="Feed Community Hub"
+            android:summary="Share your AIS data with aiscatcher.org"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="hub_key"
+            android:title="Sharing Key"
+            android:summary="Enter your UUID from aiscatcher.org"
+            android:dependency="hub_sharing"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- DNS Settings -->
+    <PreferenceCategory
+        android:title="DNS Configuration"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreferenceCompat
+            android:key="dns_manual"
+            android:title="Manual DNS Settings"
+            android:summary="Override system DNS"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="dns_primary"
+            android:title="Primary DNS"
+            android:summary="8.8.8.8"
+            android:defaultValue="8.8.8.8"
+            android:dependency="dns_manual"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:key="dns_secondary"
+            android:title="Secondary DNS"
+            android:summary="8.8.4.4"
+            android:defaultValue="8.8.4.4"
+            android:dependency="dns_manual"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <!-- Network Routing & Diagnostics -->
+    <PreferenceCategory
+        android:title="Networking Tools"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="net_diagnostics"
+            android:title="Network Diagnostics"
+            android:summary="Tap to run network tests"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

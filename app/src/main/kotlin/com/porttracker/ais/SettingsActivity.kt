@@ -30,6 +30,7 @@ class SettingsActivity : AppCompatActivity() {
                 0 -> "Status"
                 1 -> "Settings"
                 2 -> "Control"
+                3 -> "Networking"
                 else -> ""
             }
         }.attach()
@@ -86,13 +87,14 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private inner class SettingsPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
-        override fun getItemCount(): Int = 3
+        override fun getItemCount(): Int = 4
 
         override fun createFragment(position: Int): Fragment {
             return when (position) {
                 0 -> StatusFragment()
                 1 -> SettingsFragment()
                 2 -> ControlFragment()
+                3 -> NetworkingFragment()
                 else -> StatusFragment()
             }
         }
@@ -552,6 +554,33 @@ class SettingsActivity : AppCompatActivity() {
                 activity?.finishAffinity()
                 android.os.Process.killProcess(android.os.Process.myPid())
             }, 500)
+        }
+    }
+
+    // =============== NETWORKING FRAGMENT ===============
+    class NetworkingFragment : PreferenceFragmentCompat() {
+        override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+            setPreferencesFromResource(R.xml.preferences_networking, rootKey)
+
+            setupEditTextPreferenceSummary("hub_key")
+            setupEditTextPreferenceSummary("dns_primary")
+            setupEditTextPreferenceSummary("dns_secondary")
+            
+            findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener {
+                Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
+                // Implementation for diagnostics can be added here
+                true
+            }
+        }
+
+        private fun setupEditTextPreferenceSummary(key: String) {
+            findPreference<androidx.preference.EditTextPreference>(key)?.apply {
+                summary = text ?: ""
+                setOnPreferenceChangeListener { pref, newValue ->
+                    pref.summary = newValue.toString()
+                    true
+                }
+            }
         }
     }
 }

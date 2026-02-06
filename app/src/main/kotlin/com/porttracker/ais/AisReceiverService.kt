@@ -213,6 +213,12 @@ class AisReceiverService : Service() {
                 AisCatcherJava.createTCPlistener(config.tcpPort.toString())
             }
             
+            // Start Community Hub sharing
+            if (config.hubEnabled && config.hubKey.isNotEmpty()) {
+                Log.i(TAG, "Starting Community Hub sharing with key: ${config.hubKey.take(8)}...")
+                AisCatcherJava.createSharing(true, config.hubKey)
+            }
+            
             // Start web viewer
             if (config.webViewerEnabled) {
                 Log.i(TAG, "Creating WebViewer on port ${config.webViewerPort}")
@@ -333,7 +339,9 @@ class AisReceiverService : Service() {
             gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
             gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
             gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
-            gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10
+            gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
+            hubEnabled = prefs.getBoolean("hub_sharing", false),
+            hubKey = prefs.getString("hub_key", "") ?: ""
         )
     }
 
@@ -417,7 +425,9 @@ data class ServiceConfig(
     val gpsdEnabled: Boolean = false,
     val gpsdHost: String = "127.0.0.1",
     val gpsdPort: Int = 2947,
-    val gpsdInterval: Int = 10
+    val gpsdInterval: Int = 10,
+    val hubEnabled: Boolean = false,
+    val hubKey: String = ""
 )
 
 /**
