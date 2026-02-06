@@ -29,6 +29,13 @@
         app:iconSpaceReserved="false">
 
         <EditTextPreference
+            android:key="pref_porttracker_username"
+            android:title="Porttracker Username"
+            android:summary="Enter your Porttracker username"
+            android:defaultValue=""
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
             android:key="pref_station_name"
             android:title="Porttracker AIS Station Name"
             android:summary="Enter a name for your station"
