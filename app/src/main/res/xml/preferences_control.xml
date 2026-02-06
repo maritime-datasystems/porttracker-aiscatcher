@@ -2,9 +2,9 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <!-- AIS Receiver Control -->
+    <!-- AIS/SDR Receiver Control -->
     <PreferenceCategory
-        android:title="AIS Receiver"
+        android:title="AIS/SDR Receiver"
         app:iconSpaceReserved="false">
 
         <Preference
@@ -16,8 +16,8 @@
 
         <SwitchPreferenceCompat
             android:key="service_enabled"
-            android:title="▶ Start / ⏹ Stop"
-            android:summary="Enable or disable the AIS receiver service"
+            android:title="▶ Start / ⏹ Stop SDR"
+            android:summary="Start or stop the AIS receiver (requires SDR device)"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 

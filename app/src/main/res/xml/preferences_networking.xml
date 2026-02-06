@@ -44,8 +44,8 @@
 
         <SwitchPreferenceCompat
             android:key="webviewer_enabled"
-            android:title="Enable Web Viewer"
-            android:summary="Web-based map and status"
+            android:title="Enable WebViewer (Local)"
+            android:summary="Web-based map and status on local network"
             android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
