@@ -34,20 +34,33 @@ class ConfigurationManager(private val context: Context) {
         return try {
             val jsonObject = JSONObject(jsonString)
             val editor = prefs.edit()
+            // Read existing types FIRST so we can honour them and avoid stomping a Boolean
+            // pref with a String when the JSON sends 0/1 instead of false/true.
+            val existing = prefs.all
             val iterator = jsonObject.keys()
 
             while (iterator.hasNext()) {
                 val key = iterator.next()
-                val value = jsonObject.get(key)
+                val jsonValue = jsonObject.get(key)
+                val existingValue = existing[key]
 
-                // Basic type inference based on JSON type
-                // Note: robustness depends on matching SharedPreferences expected types
-                // Ideally we check existing type, but for now we trust the admin input matches
-                when (value) {
-                    is Boolean -> editor.putBoolean(key, value)
-                    is Int -> editor.putString(key, value.toString()) // AIS-catcher tends to use Strings for numbers in some prefs
-                    is Double -> editor.putString(key, value.toString()) // JSON uses Double for floats
-                    is String -> editor.putString(key, value)
+                when {
+                    // Existing pref is Boolean — coerce any incoming type to Boolean
+                    existingValue is Boolean -> editor.putBoolean(key, when (jsonValue) {
+                        is Boolean -> jsonValue
+                        is Int     -> jsonValue != 0
+                        is String  -> jsonValue.equals("true", ignoreCase = true)
+                        else       -> false
+                    })
+                    // Existing pref is String — always store as String
+                    existingValue is String -> editor.putString(key, jsonValue.toString())
+                    // Existing pref is Int
+                    existingValue is Int -> editor.putInt(key, jsonValue.toString().toIntOrNull() ?: 0)
+                    // No existing pref — infer storage type from JSON type
+                    jsonValue is Boolean -> editor.putBoolean(key, jsonValue)
+                    jsonValue is Int     -> editor.putString(key, jsonValue.toString())
+                    jsonValue is Double  -> editor.putString(key, jsonValue.toString())
+                    jsonValue is String  -> editor.putString(key, jsonValue)
                 }
             }
             editor.apply()

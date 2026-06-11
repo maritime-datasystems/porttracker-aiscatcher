@@ -52,11 +52,13 @@ class AisReceiverService : Service() {
         interface StatusListener { fun onStatus(status: String) }
         interface ErrorListener { fun onError(error: String) }
         
-        private val nmeaListeners = mutableListOf<NMEAListener>()
-        private val statusListeners = mutableListOf<StatusListener>()
-        private val errorListeners = mutableListOf<ErrorListener>()
-        
-        fun addNMEAListener(l: NMEAListener) = nmeaListeners.add(l)
+        // CopyOnWriteArrayList: onNMEA/onStatus/onError are called from the native receiver
+        // thread while add/remove happen on the UI thread — ArrayList is not thread-safe here.
+        private val nmeaListeners   = java.util.concurrent.CopyOnWriteArrayList<NMEAListener>()
+        private val statusListeners = java.util.concurrent.CopyOnWriteArrayList<StatusListener>()
+        private val errorListeners  = java.util.concurrent.CopyOnWriteArrayList<ErrorListener>()
+
+        fun addNMEAListener(l: NMEAListener)    = nmeaListeners.add(l)
         fun removeNMEAListener(l: NMEAListener) = nmeaListeners.remove(l)
         
         // Service state
@@ -563,7 +565,7 @@ class AisReceiverService : Service() {
         }
         
         return ServiceConfig(
-            deviceType = DeviceType.entries[prefs.getString("device_type", "1")?.toIntOrNull() ?: 1],
+            deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
             frequencyCorrection = prefs.getString("frequency_correction", "0")?.toIntOrNull() ?: 0,
             udpOutputs = udpOutputs,
             tcpEnabled = prefs.getBoolean("tcp_enabled", false),

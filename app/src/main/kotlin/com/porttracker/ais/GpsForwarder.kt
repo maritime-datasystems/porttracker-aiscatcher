@@ -242,9 +242,12 @@ class GpsForwarder(
     }
     
     private fun sendNmea(nmea: String) {
+        // Capture both refs atomically-enough: stop() nulls them, executor runs concurrently.
+        val addr = destAddress ?: return
+        val sock = socket ?: return
         val data = (nmea + "\r\n").toByteArray()
-        val packet = DatagramPacket(data, data.size, destAddress, port)
-        socket?.send(packet)
+        val packet = DatagramPacket(data, data.size, addr, port)
+        sock.send(packet)
     }
     
     /**

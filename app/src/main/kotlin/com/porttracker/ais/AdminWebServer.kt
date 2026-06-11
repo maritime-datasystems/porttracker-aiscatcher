@@ -167,36 +167,27 @@ class AdminWebServer(
         val ctx = service.applicationContext
         val deviceInfo = UsbDeviceScanner.scanForDevices(ctx)
         val usbManager = ctx.getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager
-        
-        // Build USB devices list
-        val usbDevicesJson = StringBuilder("[")
-        val devices = usbManager.deviceList.values.toList()
-        devices.forEachIndexed { index, device ->
-            val isSDR = UsbDeviceScanner.isSupportedDevice(device.vendorId, device.productId)
-            val hasPermission = usbManager.hasPermission(device)
-            if (index > 0) usbDevicesJson.append(",")
-            usbDevicesJson.append("""
-                {
-                    "name": "${device.productName ?: device.deviceName}",
-                    "vendorId": ${device.vendorId},
-                    "productId": ${device.productId},
-                    "isSDR": $isSDR,
-                    "hasPermission": $hasPermission
-                }
-            """.trimIndent())
+
+        // Use JSONArray/JSONObject so device names with quotes or backslashes can't break the output.
+        val usbDevicesArray = org.json.JSONArray()
+        for (device in usbManager.deviceList.values) {
+            val obj = org.json.JSONObject()
+            obj.put("name", device.productName ?: device.deviceName)
+            obj.put("vendorId", device.vendorId)
+            obj.put("productId", device.productId)
+            obj.put("isSDR", UsbDeviceScanner.isSupportedDevice(device.vendorId, device.productId))
+            obj.put("hasPermission", usbManager.hasPermission(device))
+            usbDevicesArray.put(obj)
         }
-        usbDevicesJson.append("]")
-        
-        return """
-            {
-                "service_running": ${AisReceiverService.isRunning},
-                "sdr_connected": ${AisReceiverService.hasDevice},
-                "sdr_permission": ${deviceInfo.found && deviceInfo.isUsable},
-                "sdr_device_name": "${if (deviceInfo.found) deviceInfo.deviceName else "No device"}",
-                "message_count": ${AisReceiverService.messageCount},
-                "usb_devices": $usbDevicesJson
-            }
-        """.trimIndent()
+
+        val root = org.json.JSONObject()
+        root.put("service_running", AisReceiverService.isRunning)
+        root.put("sdr_connected", AisReceiverService.hasDevice)
+        root.put("sdr_permission", deviceInfo.found && deviceInfo.isUsable)
+        root.put("sdr_device_name", if (deviceInfo.found) deviceInfo.deviceName else "No device")
+        root.put("message_count", AisReceiverService.messageCount)
+        root.put("usb_devices", usbDevicesArray)
+        return root.toString()
     }
 
     private fun getUiStatusJson(): String {

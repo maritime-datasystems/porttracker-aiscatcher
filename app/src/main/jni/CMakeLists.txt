@@ -129,3 +129,9 @@ target_link_libraries(
     android
     ${log-lib}
 )
+
+# Android 15+ requires LOAD segments aligned to 16 KB on devices with 16 KB page size.
+# Without this flag the OS shows "ELF alignment check failed" at every app launch.
+target_link_options(AIScatcherNDK PRIVATE
+    "-Wl,-z,max-page-size=16384"
+)

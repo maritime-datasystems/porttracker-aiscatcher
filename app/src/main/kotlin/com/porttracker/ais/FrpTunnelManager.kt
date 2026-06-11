@@ -21,7 +21,7 @@ class FrpTunnelManager(private val context: Context) {
     }
     
     private var frpProcess: Process? = null
-    private var isRunning = false
+    @Volatile private var isRunning = false
     
     /**
      * Get the appropriate binary name for the device architecture.
@@ -82,7 +82,7 @@ class FrpTunnelManager(private val context: Context) {
         val subdomain = if (sanitizedName.isNotEmpty()) sanitizedName else "station-${System.currentTimeMillis()}"
         
         val configContent = """
-            serverAddr = "5.75.129.207"
+            serverAddr = "$FRP_SERVER_ADDR"
             serverPort = $FRP_SERVER_PORT
             auth.token = "$FRP_AUTH_TOKEN"
             
@@ -135,38 +135,40 @@ class FrpTunnelManager(private val context: Context) {
             )
             processBuilder.directory(context.filesDir)
             processBuilder.redirectErrorStream(true)
-            
-            // Start in background thread
+
+            // Mark running BEFORE starting the thread to close the TOCTOU window where two
+            // concurrent startTunnel() calls both see isRunning=false and spawn two processes.
+            isRunning = true
+
             Thread {
                 try {
                     frpProcess = processBuilder.start()
-                    isRunning = true
                     Log.i(TAG, "Tunnel started successfully")
                     InternalLog.log("Tunnel started successfully")
-                    
-                    // Log output for debugging
+
                     frpProcess?.inputStream?.bufferedReader()?.use { reader ->
                         reader.forEachLine { line ->
                             Log.d(TAG, "frpc: $line")
                             InternalLog.log("frpc: $line")
                         }
                     }
-                    
+
                     frpProcess?.waitFor()
-                    isRunning = false
                     Log.i(TAG, "Tunnel process exited")
                     InternalLog.log("Tunnel process exited")
-                    
+
                 } catch (e: Exception) {
                     Log.e(TAG, "Tunnel process error", e)
                     InternalLog.log("Tunnel process error: ${e.message}")
+                } finally {
                     isRunning = false
                 }
             }.start()
-            
+
             return true
-            
+
         } catch (e: Exception) {
+            isRunning = false  // Reset if thread launch itself fails
             Log.e(TAG, "Failed to start tunnel", e)
             InternalLog.log("Failed to start tunnel: ${e.message}")
             return false
