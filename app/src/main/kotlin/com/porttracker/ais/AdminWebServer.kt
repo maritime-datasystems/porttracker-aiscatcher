@@ -46,10 +46,12 @@ class AdminWebServer(
 
         Log.d(TAG, "Request: $method $uri")
 
-        // Check authentication if enabled
-        val authResponse = checkAuthentication(session)
-        if (authResponse != null) {
-            return authResponse
+        // Check authentication if enabled (bypass for health endpoint — used by remote dashboard)
+        if (uri != "/admin/api/health") {
+            val authResponse = checkAuthentication(session)
+            if (authResponse != null) {
+                return authResponse
+            }
         }
 
         // 1. Admin API Endpoints
