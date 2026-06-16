@@ -1,18 +1,54 @@
 package com.porttracker.ais
 
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
+import androidx.preference.EditTextPreference
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.PreferenceManager
+import androidx.preference.SwitchPreferenceCompat
 import androidx.viewpager2.adapter.FragmentStateAdapter
+import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
-import androidx.viewpager2.widget.ViewPager2
+
+/**
+ * Top-level extension to set up an EditTextPreference with a simple summary provider.
+ * Used by both SettingsFragment and NetworkingFragment to avoid duplication.
+ */
+private fun PreferenceFragmentCompat.setupEditTextPreferenceSummary(key: String) {
+    findPreference<EditTextPreference>(key)?.apply {
+        summary = text ?: ""
+        setOnPreferenceChangeListener { pref, newValue ->
+            pref.summary = newValue.toString()
+            true
+        }
+    }
+}
+
+/** Pre-compiled regexes for station name sanitization. */
+private val SANITIZE_NON_ALNUM = Regex("[^a-z0-9-]")
+private val SANITIZE_MULTI_DASH = Regex("-+")
+
+/** Sanitize a station name to a URL-safe slug. */
+private fun sanitizeStationName(name: String): String {
+    return name.trim().lowercase()
+        .replace(SANITIZE_NON_ALNUM, "-")
+        .replace(SANITIZE_MULTI_DASH, "-")
+        .trimEnd('-')
+}
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -36,17 +72,17 @@ class SettingsActivity : AppCompatActivity() {
         }.attach()
 
         // Check USB permission at startup
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             checkAndRequestUsbPermission()
-        }, 1000)
+        }, AUTO_START_DELAY)
 
         // Auto-start service on app launch if enabled (with delay for USB enumeration)
-        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         val autoStartOnLaunch = prefs.getBoolean("auto_start_launch", true)
         
         if (autoStartOnLaunch && !AisReceiverService.isRunning) {
             // Delay 3 seconds to allow USB device enumeration and permission
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            Handler(Looper.getMainLooper()).postDelayed({
                 if (!AisReceiverService.isRunning) {
                     // Only start if SDR is connected and has permission
                     val deviceInfo = UsbDeviceScanner.scanForDevices(this)
@@ -68,7 +104,7 @@ class SettingsActivity : AppCompatActivity() {
                         Toast.makeText(this, "🌐 Starting web server (auto)...", Toast.LENGTH_SHORT).show()
                     }
                 }
-            }, 3000)
+            }, BOOT_CHECK_DELAY)
         }
         
         // Handle USB device attached intent (from "Always open PortTracker" selection)
@@ -81,16 +117,21 @@ class SettingsActivity : AppCompatActivity() {
     }
     
     private fun handleUsbIntent(intent: Intent) {
-        if (intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            val device = intent.getParcelableExtra<android.hardware.usb.UsbDevice>(android.hardware.usb.UsbManager.EXTRA_DEVICE)
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            val device = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
             if (device != null) {
-                android.util.Log.i("porttracker-activity", "USB device attached via Intent: ${device.productName} (${device.vendorId}:${device.productId})")
+                Log.i(TAG, "USB device attached via Intent: ${device.productName} (${device.vendorId}:${device.productId})")
                 
-                val usbManager = getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager
+                val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
                 
                 if (usbManager.hasPermission(device)) {
                     // We have permission - this means user selected "Always open PortTracker"!
-                    android.util.Log.i("porttracker-activity", "USB permission already granted (persistent)")
+                    Log.i(TAG, "USB permission already granted (persistent)")
                     Toast.makeText(this, "✅ SDR connected with persistent permission", Toast.LENGTH_SHORT).show()
                     
                     // Start the service with this device
@@ -103,13 +144,13 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 } else {
                     // Request permission - this time the "Always open" checkbox will be available!
-                    android.util.Log.i("porttracker-activity", "Requesting USB permission with 'Always' option available")
-                    val pendingIntent = android.app.PendingIntent.getBroadcast(
+                    Log.i(TAG, "Requesting USB permission with 'Always' option available")
+                    val pendingIntent = PendingIntent.getBroadcast(
                         this, 0,
-                        Intent("com.porttracker.ais.USB_PERMISSION").apply {
-                            putExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE, device)
+                        Intent(USB_PERMISSION_ACTION).apply {
+                            putExtra(UsbManager.EXTRA_DEVICE, device)
                         },
-                        android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                     )
                     usbManager.requestPermission(device, pendingIntent)
                 }
@@ -119,17 +160,17 @@ class SettingsActivity : AppCompatActivity() {
     
     private fun checkAndRequestUsbPermission() {
         try {
-            val usbManager = getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager ?: return
+            val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
             val deviceInfo = UsbDeviceScanner.scanForDevices(this)
             
             if (deviceInfo.found && !deviceInfo.isUsable) {
                 // SDR found but no permission - request it
                 for ((_, device) in usbManager.deviceList) {
                     if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
-                        val pendingIntent = android.app.PendingIntent.getBroadcast(
+                        val pendingIntent = PendingIntent.getBroadcast(
                             this, 0,
-                            Intent("com.porttracker.ais.USB_PERMISSION"),
-                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                            Intent(USB_PERMISSION_ACTION),
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                         )
                         usbManager.requestPermission(device, pendingIntent)
                         return
@@ -193,7 +234,7 @@ class SettingsActivity : AppCompatActivity() {
         private fun requestUsbPermission() {
             try {
                 val ctx = context ?: return
-                val usbManager = ctx.getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                val usbManager = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
                 if (usbManager == null) {
                     Toast.makeText(ctx, "USB Manager not available", Toast.LENGTH_SHORT).show()
                     return
@@ -214,10 +255,10 @@ class SettingsActivity : AppCompatActivity() {
                 // Find the matching USB device and request permission
                 for ((_, device) in usbManager.deviceList) {
                     if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
-                        val pendingIntent = android.app.PendingIntent.getBroadcast(
+                        val pendingIntent = PendingIntent.getBroadcast(
                             ctx, 0,
-                            Intent("com.porttracker.ais.USB_PERMISSION"),
-                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                            Intent(USB_PERMISSION_ACTION),
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                         )
                         usbManager.requestPermission(device, pendingIntent)
                         Toast.makeText(ctx, "Requesting permission for ${deviceInfo.deviceName}...", Toast.LENGTH_SHORT).show()
@@ -246,7 +287,7 @@ class SettingsActivity : AppCompatActivity() {
                 override fun run() {
                     if (isAdded) {
                         updateAllStatus()
-                        handler.postDelayed(this, 2000)
+                        handler.postDelayed(this, STATUS_REFRESH_INTERVAL)
                     }
                 }
             }
@@ -313,7 +354,7 @@ class SettingsActivity : AppCompatActivity() {
 
         private fun updateGpsStatus() {
             val ctx = context ?: return
-            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+            val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
             val gpsdEnabled = prefs.getBoolean("gpsd_enabled", false)
             
             // Check location permission
@@ -420,10 +461,10 @@ class SettingsActivity : AppCompatActivity() {
                         }
                         startActivity(intent)
                     } catch (e2: Exception) {
-                        android.widget.Toast.makeText(
+                        Toast.makeText(
                             requireContext(),
                             "Could not open battery settings. Please disable optimization manually in Settings > Apps > PortTracker.",
-                            android.widget.Toast.LENGTH_LONG
+                            Toast.LENGTH_LONG
                         ).show()
                     }
                 }
@@ -435,7 +476,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         
         private fun updateBatteryOptimizationStatus() {
-            val pm = requireContext().getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            val pm = requireContext().getSystemService(Context.POWER_SERVICE) as PowerManager
             val isIgnoringBattery = pm.isIgnoringBatteryOptimizations(requireContext().packageName)
             
             findPreference<Preference>("battery_optimization")?.summary = if (isIgnoringBattery) {
@@ -450,21 +491,13 @@ class SettingsActivity : AppCompatActivity() {
             updateBatteryOptimizationStatus()
         }
 
-        private fun setupEditTextPreferenceSummary(key: String) {
-            findPreference<androidx.preference.EditTextPreference>(key)?.apply {
-                summary = text ?: ""
-                setOnPreferenceChangeListener { pref, newValue ->
-                    pref.summary = newValue.toString()
-                    true
-                }
-            }
-        }
+        // setupEditTextPreferenceSummary is now a top-level extension function
 
         private fun setupListPreferenceSummary(key: String) {
-            findPreference<androidx.preference.ListPreference>(key)?.apply {
+            findPreference<ListPreference>(key)?.apply {
                 summary = entry ?: ""
                 setOnPreferenceChangeListener { pref, newValue ->
-                    val listPref = pref as androidx.preference.ListPreference
+                    val listPref = pref as ListPreference
                     val index = listPref.findIndexOfValue(newValue.toString())
                     if (index >= 0) {
                         pref.summary = listPref.entries[index]
@@ -486,18 +519,18 @@ class SettingsActivity : AppCompatActivity() {
             setPreferencesFromResource(R.xml.preferences_control, rootKey)
 
             // Service control switch
-            findPreference<androidx.preference.SwitchPreferenceCompat>("service_enabled")?.apply {
+            findPreference<SwitchPreferenceCompat>("service_enabled")?.apply {
                 isChecked = AisReceiverService.isRunning
                 setOnPreferenceChangeListener { _, newValue ->
-                    android.util.Log.d("ControlFragment", "Switch changed to: $newValue")
+                    Log.d(TAG, "Switch changed to: $newValue")
                     // Set debounce - don't let status updates override for 3 seconds
                     userInteractingUntil = System.currentTimeMillis() + 3000
                     
                     if (newValue as Boolean) {
-                        android.util.Log.d("ControlFragment", "Calling startService()")
+                        Log.d(TAG, "Calling startService()")
                         startService()
                     } else {
-                        android.util.Log.d("ControlFragment", "Calling stopService()")
+                        Log.d(TAG, "Calling stopService()")
                         stopService()
                     }
                     false // Prevent auto-commit, we control the state manually
@@ -534,7 +567,7 @@ class SettingsActivity : AppCompatActivity() {
                 override fun run() {
                     if (isAdded) {
                         updateStatus()
-                        handler.postDelayed(this, 1000)
+                        handler.postDelayed(this, CONTROL_REFRESH_INTERVAL)
                     }
                 }
             }
@@ -554,7 +587,7 @@ class SettingsActivity : AppCompatActivity() {
             
             // Only update switch if not during user interaction debounce
             if (System.currentTimeMillis() > userInteractingUntil) {
-                findPreference<androidx.preference.SwitchPreferenceCompat>("service_enabled")?.isChecked = 
+                findPreference<SwitchPreferenceCompat>("service_enabled")?.isChecked = 
                     AisReceiverService.isRunning
             }
         }
@@ -572,7 +605,7 @@ class SettingsActivity : AppCompatActivity() {
             
             if (!deviceInfo.found) {
                 // No SDR - check if web viewer is enabled for web-only mode
-                val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+                val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
                 val webEnabled = prefs.getBoolean("webviewer_enabled", false)
                 
                 if (webEnabled) {
@@ -612,15 +645,15 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         
-        private fun requestSdrPermission(ctx: android.content.Context, deviceInfo: UsbDeviceScanner.SdrDeviceInfo) {
+        private fun requestSdrPermission(ctx: Context, deviceInfo: UsbDeviceScanner.SdrDeviceInfo) {
             try {
-                val usbManager = ctx.getSystemService(android.content.Context.USB_SERVICE) as? android.hardware.usb.UsbManager ?: return
+                val usbManager = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
                 for ((_, device) in usbManager.deviceList) {
                     if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
-                        val pendingIntent = android.app.PendingIntent.getBroadcast(
+                        val pendingIntent = PendingIntent.getBroadcast(
                             ctx, 0,
-                            Intent("com.porttracker.ais.USB_PERMISSION"),
-                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                            Intent(USB_PERMISSION_ACTION),
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                         )
                         usbManager.requestPermission(device, pendingIntent)
                         return
@@ -642,7 +675,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             
             // Clear cooldown after 1 second
-            handler.postDelayed({ isStoppingService = false }, 1000)
+            handler.postDelayed({ isStoppingService = false }, SERVICE_STOP_COOLDOWN)
         }
 
         private fun forceStopService() {
@@ -656,7 +689,7 @@ class SettingsActivity : AppCompatActivity() {
             } catch (e: Exception) { }
             
             Toast.makeText(ctx, "⛔ Force stopped", Toast.LENGTH_SHORT).show()
-            handler.postDelayed({ isStoppingService = false }, 5000)
+            handler.postDelayed({ isStoppingService = false }, FORCE_STOP_DELAY)
         }
 
         private fun shutdownApp() {
@@ -672,18 +705,18 @@ class SettingsActivity : AppCompatActivity() {
             handler.postDelayed({
                 activity?.finishAffinity()
                 android.os.Process.killProcess(android.os.Process.myPid())
-            }, 500)
+            }, SHUTDOWN_DELAY)
         }
     }
 
     // =============== WEB FRAGMENT ===============
     class NetworkingFragment : PreferenceFragmentCompat() {
         private var remoteStatusPref: Preference? = null
-        private var stationNamePref: androidx.preference.EditTextPreference? = null
-        private var enableRemotePref: androidx.preference.SwitchPreferenceCompat? = null
+        private var stationNamePref: EditTextPreference? = null
+        private var enableRemotePref: SwitchPreferenceCompat? = null
         private var localWebStatusPref: Preference? = null
-        private var webViewerEnabledPref: androidx.preference.SwitchPreferenceCompat? = null
-        private var localWebPortPref: androidx.preference.EditTextPreference? = null
+        private var webViewerEnabledPref: SwitchPreferenceCompat? = null
+        private var localWebPortPref: EditTextPreference? = null
         
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences_networking, rootKey)
@@ -748,7 +781,8 @@ class SettingsActivity : AppCompatActivity() {
                     val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                     startActivity(intent)
                 } else {
-                    Toast.makeText(context, "Local web server is not enabled", Toast.LENGTH_SHORT).show()
+                    val ctx = context ?: return@setOnPreferenceClickListener true
+                    Toast.makeText(ctx, "Local web server is not enabled", Toast.LENGTH_SHORT).show()
                 }
                 true
             }
@@ -762,13 +796,13 @@ class SettingsActivity : AppCompatActivity() {
                     .setPositiveButton("Close", null)
                     .setNeutralButton("Clear") { _, _ -> 
                         InternalLog.clear()
-                        Toast.makeText(context, "Logs cleared", Toast.LENGTH_SHORT).show()
+                        context?.let { Toast.makeText(it, "Logs cleared", Toast.LENGTH_SHORT).show() }
                     }
                     .setNegativeButton("Copy") { _, _ ->
-                        val clipboard = requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                         val clip = android.content.ClipData.newPlainText("Debug Logs", logs)
                         clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
+                        context?.let { Toast.makeText(it, "Logs copied to clipboard", Toast.LENGTH_SHORT).show() }
                     }
                     .show()
                 true
@@ -795,16 +829,17 @@ class SettingsActivity : AppCompatActivity() {
                 updateRemoteStatus(stationNamePref?.text ?: "", enabled)
                 
                 // Trigger service update
-                val intent = Intent(context, AisReceiverService::class.java).apply {
+                val ctx = context ?: return@setOnPreferenceChangeListener true
+                val intent = Intent(ctx, AisReceiverService::class.java).apply {
                     putExtra("REMOTE_ENABLED", enabled)
                     putExtra("STATION_NAME", stationNamePref?.text ?: "")
                 }
-                context?.startService(intent)
+                ctx.startForegroundService(intent)
                 
                 if (enabled) {
-                    Toast.makeText(context, "🔄 Initializing Remote Access...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "🔄 Initializing Remote Access...", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "🛑 Stopping Remote Access...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "🛑 Stopping Remote Access...", Toast.LENGTH_SHORT).show()
                 }
                 
                 true
@@ -816,18 +851,15 @@ class SettingsActivity : AppCompatActivity() {
                 val enabled = enableRemotePref?.isChecked == true
                 
                 if (enabled && stationName.isNotEmpty()) {
-                    val sanitizedName = stationName.lowercase()
-                        .replace(Regex("[^a-z0-9-]"), "-")
-                        .replace(Regex("-+"), "-")
-                        .trim('-')
-                        .take(32)
+                    val sanitizedName = sanitizeStationName(stationName).take(32)
                     // Ensure we use the correct domain here for the link
                     val url = "http://$sanitizedName.connect.porttracker.co"
                     
                     val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                     startActivity(intent)
                 } else {
-                    Toast.makeText(context, "Remote access is not enabled", Toast.LENGTH_SHORT).show()
+                    val ctx = context ?: return@setOnPreferenceClickListener true
+                    Toast.makeText(ctx, "Remote access is not enabled", Toast.LENGTH_SHORT).show()
                 }
                 true
             }
@@ -835,22 +867,11 @@ class SettingsActivity : AppCompatActivity() {
             // Initial status update
             updateRemoteStatus(stationNamePref?.text ?: "", enableRemotePref?.isChecked == true)
             
-            findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener {
-                Toast.makeText(context, "Networking diagnostics starting...", Toast.LENGTH_SHORT).show()
-                // Implementation for diagnostics can be added here
-                true
-            }
+            // TODO: Implement network diagnostics
+            // findPreference<Preference>("net_diagnostics")?.setOnPreferenceClickListener { ... }
         }
         
-        private fun setupEditTextPreferenceSummary(key: String) {
-            findPreference<androidx.preference.EditTextPreference>(key)?.apply {
-                summary = text ?: ""
-                setOnPreferenceChangeListener { pref, newValue ->
-                    pref.summary = newValue.toString()
-                    true
-                }
-            }
-        }
+        // setupEditTextPreferenceSummary is now a top-level extension function
         
         private fun updateLocalWebStatus(enabled: Boolean, port: String) {
             if (enabled) {
@@ -881,11 +902,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         
         private fun updateRemoteStatus(stationName: String, enabled: Boolean) {
-            val sanitizedName = stationName.lowercase()
-                .replace(Regex("[^a-z0-9-]"), "-")
-                .replace(Regex("-+"), "-")
-                .trim('-')
-                .take(32)
+            val sanitizedName = sanitizeStationName(stationName).take(32)
             
             if (enabled && sanitizedName.isNotEmpty()) {
                 val url = "http://$sanitizedName.connect.porttracker.co"
@@ -913,5 +930,17 @@ class SettingsActivity : AppCompatActivity() {
                 remoteStatusPref?.isEnabled = false
             }
         }
+    }
+
+    private companion object {
+        const val TAG = "SettingsActivity"
+        const val STATUS_REFRESH_INTERVAL = 2000L
+        const val CONTROL_REFRESH_INTERVAL = 1000L
+        const val SERVICE_STOP_COOLDOWN = 1000L
+        const val FORCE_STOP_DELAY = 5000L
+        const val SHUTDOWN_DELAY = 500L
+        const val AUTO_START_DELAY = 1000L
+        const val BOOT_CHECK_DELAY = 3000L
+        const val USB_PERMISSION_ACTION = "com.porttracker.ais.USB_PERMISSION"
     }
 }

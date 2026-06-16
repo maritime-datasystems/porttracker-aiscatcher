@@ -5,8 +5,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.hardware.usb.UsbManager
-import android.os.PowerManager
-import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 

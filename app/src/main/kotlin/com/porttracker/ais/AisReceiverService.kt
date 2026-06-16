@@ -12,7 +12,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
+
 import android.content.pm.ServiceInfo
 import com.jvdegithub.aiscatcher.AisCatcherJava
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,24 +39,18 @@ class AisReceiverService : Service() {
         
         @JvmStatic fun onStatus(status: String) {
             Log.i(TAG, "Status: $status")
-            statusListeners.forEach { it.onStatus(status) }
         }
         
         @JvmStatic fun onError(error: String) {
             Log.e(TAG, "Error: $error")
-            errorListeners.forEach { it.onError(error) }
         }
         
         // Listener interfaces
         interface NMEAListener { fun onNMEA(nmea: String) }
-        interface StatusListener { fun onStatus(status: String) }
-        interface ErrorListener { fun onError(error: String) }
         
-        // CopyOnWriteArrayList: onNMEA/onStatus/onError are called from the native receiver
+        // CopyOnWriteArrayList: onNMEA is called from the native receiver
         // thread while add/remove happen on the UI thread — ArrayList is not thread-safe here.
-        private val nmeaListeners   = java.util.concurrent.CopyOnWriteArrayList<NMEAListener>()
-        private val statusListeners = java.util.concurrent.CopyOnWriteArrayList<StatusListener>()
-        private val errorListeners  = java.util.concurrent.CopyOnWriteArrayList<ErrorListener>()
+        private val nmeaListeners = java.util.concurrent.CopyOnWriteArrayList<NMEAListener>()
 
         fun addNMEAListener(l: NMEAListener)    = nmeaListeners.add(l)
         fun removeNMEAListener(l: NMEAListener) = nmeaListeners.remove(l)
@@ -90,6 +84,8 @@ class AisReceiverService : Service() {
     private var gpsForwarder: GpsForwarder? = null
     private var frpTunnelManager: FrpTunnelManager? = null
     private var adminWebServer: AdminWebServer? = null
+    private var mqttPublisher: MqttPublisher? = null
+    private var mqttNmeaListener: NMEAListener? = null
     private val startLock = Object()  // Prevent concurrent starts
     
     private val INTERNAL_WEB_PORT = 8888
@@ -101,34 +97,30 @@ class AisReceiverService : Service() {
     }
     
     private fun extractWebAssets() {
-        try {
-            val assetManager = assets
-            val filesList = assetManager.list("web") ?: return
-            
-            val webDir = java.io.File(filesDir, "web")
-            if (!webDir.exists()) webDir.mkdirs()
-            
-            for (filename in filesList) {
-                try {
-                    val inStream = assetManager.open("web/$filename")
-                    val outFile = java.io.File(webDir, filename)
-                    val outStream = java.io.FileOutputStream(outFile)
-                    
-                    val buffer = ByteArray(1024)
-                    var read: Int
-                    while (inStream.read(buffer).also { read = it } != -1) {
-                        outStream.write(buffer, 0, read)
-                    }
-                    inStream.close()
-                    outStream.close()
-                    Log.i(TAG, "Extracted web asset: $filename")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to extract web asset: $filename", e)
-                }
-            }
-        } catch (e: Exception) {
-             Log.e(TAG, "Failed to list web assets", e)
+        val webDir = java.io.File(filesDir, "web")
+        val versionFile = java.io.File(webDir, ".version")
+        val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName
+
+        if (versionFile.exists() && versionFile.readText() == currentVersion) {
+            return  // Assets already extracted for this version
         }
+
+        if (!webDir.exists()) webDir.mkdirs()
+        val assetManager = assets
+        val files = assetManager.list("web") ?: return
+        for (filename in files) {
+            try {
+                assetManager.open("web/$filename").use { inStream ->
+                    java.io.FileOutputStream(java.io.File(webDir, filename)).use { outStream ->
+                        inStream.copyTo(outStream)
+                    }
+                }
+                Log.i(TAG, "Extracted web asset: $filename")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract $filename", e)
+            }
+        }
+        versionFile.writeText(currentVersion ?: "")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -182,7 +174,7 @@ class AisReceiverService : Service() {
         // Start receiver in background thread
         shouldStop.set(false)
         receiverThread = Thread {
-            runServiceLoop()
+            runServiceLoop(config)
         }.apply {
             name = "AIS-Receiver-Thread"
             start()
@@ -198,57 +190,20 @@ class AisReceiverService : Service() {
             }
         }
         
-        // Check for Intent extras overrides (to handle race condition with SharedPreferences update)
+        // Manage FRP tunnel — use intent extras if present, otherwise config
         if (intent?.hasExtra("REMOTE_ENABLED") == true) {
             val overrideEnabled = intent.getBooleanExtra("REMOTE_ENABLED", false)
             val overrideName = intent.getStringExtra("STATION_NAME") ?: config.stationName
             Log.i(TAG, "Override config from intent: remote=$overrideEnabled, station='$overrideName'")
-            
-            // Create a copy of config with overrides (using data class copy)
-            // Note: Since config is immutable, we just use local variables for logic below
-            // Ideally we should update the config object, but here we just govern the logic
-            
-            // Start/Stop FRP tunnel based on OVERRIDE
-            if (frpTunnelManager == null) {
-                frpTunnelManager = FrpTunnelManager(this)
-            }
-            
-            if (overrideEnabled && overrideName.isNotEmpty()) {
-                if (frpTunnelManager?.isRunning() != true) {
-                    Log.i(TAG, "Starting FRP tunnel (Override) for $overrideName...")
-                    if (frpTunnelManager?.startTunnel(overrideName, config.webViewerPort) == true) {
-                        Log.i(TAG, "FRP tunnel started")
-                    }
-                }
-            } else {
-                if (frpTunnelManager?.isRunning() == true) {
-                    Log.i(TAG, "Stopping FRP tunnel (Override)")
-                    frpTunnelManager?.stopTunnel()
-                }
-            }
+            manageFrpTunnel(overrideEnabled, overrideName, config.webViewerPort)
         } else {
-            // Standard Start/Stop based on SharedPreferences Config
             Log.i(TAG, "FRP config: remoteEnabled=${config.remoteAccessEnabled}, stationName='${config.stationName}'")
-            
-            if (frpTunnelManager == null) {
-                frpTunnelManager = FrpTunnelManager(this)
-            }
-            
-            if (config.remoteAccessEnabled && config.stationName.isNotEmpty()) {
-                if (frpTunnelManager?.isRunning() != true) {
-                    Log.i(TAG, "Starting FRP tunnel for ${config.stationName}...")
-                    if (frpTunnelManager?.startTunnel(config.stationName, config.webViewerPort) == true) {
-                        Log.i(TAG, "FRP tunnel started for station: ${config.stationName}")
-                    } else {
-                        Log.w(TAG, "FRP tunnel failed to start")
-                    }
-                }
-            } else {
-                if (frpTunnelManager?.isRunning() == true) {
-                    Log.i(TAG, "Stopping FRP tunnel (disabled)")
-                    frpTunnelManager?.stopTunnel()
-                }
-            }
+            manageFrpTunnel(config.remoteAccessEnabled, config.stationName, config.webViewerPort)
+        }
+        
+        // Start MQTT publishing if enabled and configured
+        if (config.mqttEnabled && config.mqttTopicJson.isNotEmpty()) {
+            startMqttPublisher()
         }
         
         isRunning = true
@@ -260,15 +215,18 @@ class AisReceiverService : Service() {
     
     private fun openUsbDevice(vendorId: Int, productId: Int): Int {
         try {
+            // Close previous connection if any
+            usbConnection?.close()
+            usbConnection = null
+
             val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
             for ((_, device) in usbManager.deviceList) {
                 if (device.vendorId == vendorId && device.productId == productId) {
                     if (usbManager.hasPermission(device)) {
-                        usbConnection = usbManager.openDevice(device)
-                        if (usbConnection != null) {
-                            Log.i(TAG, "USB device opened successfully: ${device.productName}")
-                            return usbConnection!!.fileDescriptor
-                        }
+                        val connection = usbManager.openDevice(device) ?: return -1
+                        usbConnection = connection
+                        Log.i(TAG, "USB device opened successfully: ${device.productName}")
+                        return connection.fileDescriptor
                     } else {
                         Log.w(TAG, "No USB permission for device")
                     }
@@ -278,6 +236,27 @@ class AisReceiverService : Service() {
             Log.e(TAG, "Error opening USB device", e)
         }
         return -1
+    }
+
+    private fun manageFrpTunnel(enabled: Boolean, stationName: String, port: Int) {
+        if (frpTunnelManager == null) {
+            frpTunnelManager = FrpTunnelManager(this)
+        }
+        if (enabled && stationName.isNotEmpty()) {
+            if (frpTunnelManager?.isRunning() != true) {
+                Log.i(TAG, "Starting FRP tunnel for $stationName...")
+                if (frpTunnelManager?.startTunnel(stationName, port) == true) {
+                    Log.i(TAG, "FRP tunnel started for station: $stationName")
+                } else {
+                    Log.w(TAG, "FRP tunnel failed to start")
+                }
+            }
+        } else {
+            if (frpTunnelManager?.isRunning() == true) {
+                Log.i(TAG, "Stopping FRP tunnel")
+                frpTunnelManager?.stopTunnel()
+            }
+        }
     }
 
     fun triggerEngineRestart() {
@@ -290,7 +269,7 @@ class AisReceiverService : Service() {
         }
     }
 
-    private fun runServiceLoop() {
+    private fun runServiceLoop(config: ServiceConfig) {
         Log.i(TAG, "Service Loop Started")
         
         try {
@@ -299,9 +278,6 @@ class AisReceiverService : Service() {
             serviceLock.lock()
             try {
                 restartRequested.set(false)
-                
-                // Reload config fresh
-                val config = loadConfig()
                 
                 // Manage Admin Web Server
                 if (config.webViewerEnabled) {
@@ -430,9 +406,14 @@ class AisReceiverService : Service() {
                 // External Admin/Proxy Server is managed in runServiceLoop
             }
             
-            // Try to create receiver (SDR is always attempted if device available)
+            // Try to create receiver — guard against invalid fd which causes native SIGABRT
             Log.i(TAG, "Creating receiver (source=$source, fd=$fd)")
-            val result = AisCatcherJava.createReceiver(source, fd, 0, 0, 0)
+            val result = if (fd < 0) {
+                Log.w(TAG, "No valid USB file descriptor (fd=$fd), skipping createReceiver")
+                -1  // Treat as no device
+            } else {
+                AisCatcherJava.createReceiver(source, fd, 0, 0, 0)
+            }
             
             if (result == 0) {
                 hasDevice = true
@@ -524,6 +505,17 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error stopping FRP tunnel", e)
         }
         
+        // Stop MQTT publisher
+        try {
+            mqttNmeaListener?.let { removeNMEAListener(it) }
+            mqttNmeaListener = null
+            mqttPublisher?.stop()
+            mqttPublisher = null
+            Log.i(TAG, "MQTT publisher stopped")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping MQTT publisher", e)
+        }
+        
         // Stop Admin Web Server
         try {
             adminWebServer?.stop()
@@ -566,13 +558,11 @@ class AisReceiverService : Service() {
         
         return ServiceConfig(
             deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
-            frequencyCorrection = prefs.getString("frequency_correction", "0")?.toIntOrNull() ?: 0,
             udpOutputs = udpOutputs,
             tcpEnabled = prefs.getBoolean("tcp_enabled", false),
             tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
             webViewerEnabled = prefs.getBoolean("webviewer_enabled", false),
             webViewerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
-            webServerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
             gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
             gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
             gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
@@ -580,7 +570,15 @@ class AisReceiverService : Service() {
             hubEnabled = prefs.getBoolean("hub_sharing", false),
             hubKey = prefs.getString("hub_key", "") ?: "",
             remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
-            stationName = prefs.getString("pref_station_name", "") ?: ""
+            stationName = prefs.getString("pref_station_name", "") ?: "",
+            mqttEnabled = prefs.getBoolean("mqtt_enabled", false),
+            mqttBrokerUrl = prefs.getString("mqtt_broker_url", "ssl://mqtt.navisense.de:8883") ?: "ssl://mqtt.navisense.de:8883",
+            mqttUsername = prefs.getString("mqtt_username", "") ?: "",
+            mqttPassword = prefs.getString("mqtt_password", "") ?: "",
+            mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
+            mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
+            mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
+            mqttStationName = prefs.getString("mqtt_station_name", "") ?: ""
         )
     }
 
@@ -637,6 +635,61 @@ class AisReceiverService : Service() {
         }
         wakeLock = null
     }
+    /**
+     * Start the MQTT publisher on a background thread.
+     * Reads credentials directly from config (saved via settings web UI).
+     */
+    private fun startMqttPublisher() {
+        Thread({
+            try {
+                val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+                val brokerUrl = prefs.getString("mqtt_broker_url", "") ?: ""
+                val username = prefs.getString("mqtt_username", "") ?: ""
+                val password = prefs.getString("mqtt_password", "") ?: ""
+                val topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
+                val topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
+                val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
+                val stationName = prefs.getString("mqtt_station_name", "") ?: ""
+
+                if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
+                    Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
+                    return@Thread
+                }
+
+                Log.i(TAG, "Starting MQTT publisher: broker=$brokerUrl, topic=${if (format == "raw") topicRaw else topicJson}")
+
+                val publisher = MqttPublisher(this)
+                publisher.start(
+                    MqttPublisher.Config(
+                        brokerUrl = brokerUrl,
+                        username = username,
+                        password = password,
+                        topicRaw = topicRaw,
+                        topicJson = topicJson,
+                        format = format,
+                        qos = 1,
+                        stationName = stationName
+                    )
+                )
+
+                mqttPublisher = publisher
+
+                // Register NMEA listener to forward messages
+                val listener = object : NMEAListener {
+                    override fun onNMEA(nmea: String) {
+                        publisher.publishNmea(nmea)
+                    }
+                }
+                mqttNmeaListener = listener
+                addNMEAListener(listener)
+
+                Log.i(TAG, "MQTT publisher started and registered as NMEA listener")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting MQTT publisher", e)
+            }
+        }, "MQTT-Setup").start()
+    }
 }
 
 /**
@@ -654,13 +707,11 @@ data class UdpOutput(
  */
 data class ServiceConfig(
     val deviceType: DeviceType = DeviceType.RTLSDR,
-    val frequencyCorrection: Int = 0,
     val udpOutputs: List<UdpOutput> = emptyList(),
     val tcpEnabled: Boolean = false,
     val tcpPort: Int = 10111,
     val webViewerEnabled: Boolean = true,
     val webViewerPort: Int = 8080,
-    val webServerPort: Int = 8080,
     val gpsdEnabled: Boolean = false,
     val gpsdHost: String = "127.0.0.1",
     val gpsdPort: Int = 2947,
@@ -668,7 +719,15 @@ data class ServiceConfig(
     val hubEnabled: Boolean = false,
     val hubKey: String = "",
     val remoteAccessEnabled: Boolean = false,
-    val stationName: String = ""
+    val stationName: String = "",
+    val mqttEnabled: Boolean = false,
+    val mqttBrokerUrl: String = "ssl://mqtt.navisense.de:8883",
+    val mqttUsername: String = "",
+    val mqttPassword: String = "",
+    val mqttTopicRaw: String = "",
+    val mqttTopicJson: String = "",
+    val mqttFormat: String = "aisc-json",
+    val mqttStationName: String = ""
 )
 
 /**

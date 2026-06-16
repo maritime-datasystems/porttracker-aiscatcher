@@ -37,12 +37,12 @@ class GpsForwarder(
         private const val MIN_DISTANCE_M = 0f   // Update on any movement
         
         // Stats for Status display
-        @Volatile var lastLatitude: Double = 0.0
-        @Volatile var lastLongitude: Double = 0.0
-        @Volatile var lastHeading: Float = 0f
-        @Volatile var hasPosition: Boolean = false
-        @Volatile var hasHeading: Boolean = false
-        @Volatile var isForwarding: Boolean = false
+        @Volatile internal var lastLatitude: Double = 0.0
+        @Volatile internal var lastLongitude: Double = 0.0
+        @Volatile internal var lastHeading: Float = 0f
+        @Volatile internal var hasPosition: Boolean = false
+        @Volatile internal var hasHeading: Boolean = false
+        @Volatile internal var isForwarding: Boolean = false
         
         // Message count tracking (per minute)
         private val messageTimes = mutableListOf<Long>()
@@ -82,8 +82,12 @@ class GpsForwarder(
     private var sensorManager: SensorManager? = null
     private var socket: DatagramSocket? = null
     private var destAddress: InetAddress? = null
-    private val executor = Executors.newSingleThreadExecutor()
+    private var executor = Executors.newSingleThreadExecutor()
     private var isRunning = false
+    
+    // Cached date formatters (accessed only from single-thread executor, so thread-safe)
+    private val timeFormat = SimpleDateFormat("HHmmss.SS", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+    private val dateFormat = SimpleDateFormat("ddMMyy", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
     
     // Compass sensor data
     private var gravity: FloatArray? = null
@@ -92,6 +96,7 @@ class GpsForwarder(
     
     fun start(): Boolean {
         if (isRunning) return true
+        executor = Executors.newSingleThreadExecutor()
         
         try {
             // Check permissions
@@ -169,6 +174,8 @@ class GpsForwarder(
         }
         socket = null
         destAddress = null
+        
+        executor.shutdownNow()
         
         Log.i(TAG, "GPS+HDT forwarding stopped")
     }
@@ -254,8 +261,8 @@ class GpsForwarder(
      * Generate GPRMC sentence (Recommended Minimum Navigation Information)
      */
     private fun generateGPRMC(location: Location): String {
-        val time = SimpleDateFormat("HHmmss.SS", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-        val date = SimpleDateFormat("ddMMyy", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+        val time = timeFormat
+        val date = dateFormat
         val now = Date(location.time)
         
         val lat = formatLatitude(location.latitude)
@@ -271,7 +278,7 @@ class GpsForwarder(
      * Generate GPGGA sentence (Global Positioning System Fix Data)
      */
     private fun generateGPGGA(location: Location): String {
-        val time = SimpleDateFormat("HHmmss.SS", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+        val time = timeFormat
         val now = Date(location.time)
         
         val lat = formatLatitude(location.latitude)

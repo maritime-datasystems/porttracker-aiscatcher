@@ -2,10 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- USB Host for SDR devices -->
-    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     
     <!-- Permissions -->
-    <permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -89,11 +88,7 @@
         <receiver
             android:name=".DebugReceiver"
             android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.porttracker.ais.FORCE_START" />
-                <action android:name="com.porttracker.ais.FORCE_STOP" />
-            </intent-filter>
+            android:exported="false">
         </receiver>
 
     </application>

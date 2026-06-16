@@ -1,17 +1,16 @@
 package com.porttracker.ais
 
-import android.content.Context
-import android.content.SharedPreferences
 import android.util.Base64
 import android.util.Log
 import fi.iki.elonen.NanoHTTPD
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Properties
+import org.json.JSONObject
 
 class AdminWebServer(
     private val service: AisReceiverService,
@@ -19,7 +18,9 @@ class AdminWebServer(
     private val internalApiPort: Int
 ) : NanoHTTPD(null, port) {
 
-    private val TAG = "porttracker-service.AdminWeb"
+    companion object {
+        private const val TAG = "porttracker-service.AdminWeb"
+    }
     private var isRunning = false
     private val configManager = ConfigurationManager(service)
 
@@ -141,7 +142,8 @@ class AdminWebServer(
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start service", e)
-                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", """{"success":false,"error":"${e.message}"}""")
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                    JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown error") }.toString())
             }
         }
         
@@ -151,13 +153,29 @@ class AdminWebServer(
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop service", e)
-                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", """{"success":false,"error":"${e.message}"}""")
+                return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                    JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown error") }.toString())
             }
         }
 
         if (session.method == Method.POST && session.uri == "/admin/restart") {
              service.triggerEngineRestart()
              return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"restarting_soon\"}")
+        }
+
+        // --- TrustedDocks / MQTT Gateway Endpoints ---
+
+        if (session.method == Method.POST && session.uri == "/admin/api/gateway/connect") {
+            return handleGatewayConnect(session)
+        }
+
+        if (session.method == Method.GET && session.uri == "/admin/api/gateway/status") {
+            return handleGatewayStatus()
+        }
+
+        // --- Health endpoint for remote dashboard monitoring ---
+        if (session.method == Method.GET && session.uri == "/admin/api/health") {
+            return handleHealth()
         }
 
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Admin Endpoint Not Found")
@@ -226,19 +244,17 @@ class AdminWebServer(
         } catch (e: Exception) { "Unknown" }
 
         // JSON Building
-        return """
-            {
-                "app_version": "$appVersion",
-                "local_ip": "$localIp",
-                "network_status": "$netStatus",
-                "service_status": "$serviceStatus",
-                "device_status": "$deviceSummary",
-                "msg_count": ${AisReceiverService.messageCount},
-                "gps_status": "$gpsStatus",
-                "gps_coordinates": "$gpsCoords",
-                "gps_msg_count": ${GpsForwarder.messagesLastMinute}
-            }
-        """.trimIndent()
+        return JSONObject().apply {
+            put("app_version", appVersion)
+            put("local_ip", localIp)
+            put("network_status", netStatus)
+            put("service_status", serviceStatus)
+            put("device_status", deviceSummary)
+            put("msg_count", AisReceiverService.messageCount)
+            put("gps_status", gpsStatus)
+            put("gps_coordinates", gpsCoords)
+            put("gps_msg_count", GpsForwarder.messagesLastMinute)
+        }.toString()
     }
 
     private fun serveStaticFile(file: File): Response {
@@ -267,9 +283,10 @@ class AdminWebServer(
     private fun proxyToInternalServer(session: IHTTPSession): Response {
         val internalUrl = "http://127.0.0.1:$internalApiPort${session.uri}${if (session.queryParameterString != null) "?" + session.queryParameterString else ""}"
         
+        var connection: HttpURLConnection? = null
         return try {
             val url = URL(internalUrl)
-            val connection = url.openConnection() as HttpURLConnection
+            connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = session.method.name
             
             // Disable read timeout for streaming endpoints (SSE)
@@ -280,45 +297,54 @@ class AdminWebServer(
                 connection.readTimeout = 10000
             }
             
-        connection.connectTimeout = 5000
-        connection.setRequestProperty("Accept-Encoding", "identity") // Force uncompressed
-        
-        val responseCode = connection.responseCode
-        val rawStream = if (responseCode < 400) connection.inputStream else connection.errorStream
-        val contentType = connection.contentType ?: "application/octet-stream"
-        
-        Log.d(TAG, "Proxying $internalUrl: Code=$responseCode, Type=$contentType")
-        
-        val finalStreamToUse = if (contentType.startsWith("text/event-stream")) {
-            Log.d(TAG, "Starting SSE Heartbeat Proxy")
-            SseStreamHandler(rawStream).getInputStream()
-        } else {
-            rawStream
-        }
-
-        val response = newFixedLengthResponse(
-            Response.Status.lookup(responseCode),
-            contentType,
-            finalStreamToUse,
-            -1 // Chunked
-        )
-        
-        // Forward key headers
-        val cacheControl = connection.getHeaderField("Cache-Control")
-        if (cacheControl != null) response.addHeader("Cache-Control", cacheControl)
-        
-        // Add headers for SSE stability
-        if (contentType.startsWith("text/event-stream")) {
-            response.addHeader("Cache-Control", "no-cache")
-            response.addHeader("X-Accel-Buffering", "no")
-            response.addHeader("Connection", "keep-alive")
-        }
-        
-        return response
+            connection.connectTimeout = 5000
+            connection.setRequestProperty("Accept-Encoding", "identity") // Force uncompressed
+            
+            val responseCode = connection.responseCode
+            val rawStream = if (responseCode < 400) connection.inputStream else connection.errorStream
+            val contentType = connection.contentType ?: "application/octet-stream"
+            
+            Log.d(TAG, "Proxying $internalUrl: Code=$responseCode, Type=$contentType")
+            
+            if (contentType.startsWith("text/event-stream")) {
+                // SSE: hand off the raw stream to SseStreamHandler (it owns the connection lifecycle)
+                Log.d(TAG, "Starting SSE Heartbeat Proxy")
+                val sseStream = SseStreamHandler(rawStream).getInputStream()
+                val response = newFixedLengthResponse(
+                    Response.Status.lookup(responseCode),
+                    contentType,
+                    sseStream,
+                    -1 // Chunked
+                )
+                response.addHeader("Cache-Control", "no-cache")
+                response.addHeader("X-Accel-Buffering", "no")
+                response.addHeader("Connection", "keep-alive")
+                return response
+            } else {
+                // Non-streaming: copy response bytes then disconnect
+                val responseBytes = rawStream.readBytes()
+                val cacheControl = connection.getHeaderField("Cache-Control")
+                connection.disconnect()
+                connection = null // prevent double-disconnect in finally
+                
+                val response = newFixedLengthResponse(
+                    Response.Status.lookup(responseCode),
+                    contentType,
+                    ByteArrayInputStream(responseBytes),
+                    responseBytes.size.toLong()
+                )
+                
+                // Forward key headers
+                if (cacheControl != null) response.addHeader("Cache-Control", cacheControl)
+                
+                return response
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Proxy Error to $internalUrl", e)
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "Proxy Error: ${e.message}")
+        } finally {
+            connection?.disconnect()
         }
     }
     
@@ -327,7 +353,7 @@ class AdminWebServer(
         private val pipedOut = java.io.PipedOutputStream()
         private val pipedIn = java.io.PipedInputStream(pipedOut, 4096)
         private val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
-        private var isRunning = true
+        @Volatile private var isRunning = true
         
         fun getInputStream(): InputStream {
             startRelay()
@@ -354,12 +380,12 @@ class AdminWebServer(
             }
         }
         
+        // Pre-allocate constant heartbeat byte array (4KB padding to force flush for Android/WebView)
+        private val heartbeat = ": keep-alive ${" ".repeat(4096)}\n\n".toByteArray()
+        
         private fun startHeartbeat() {
             executor.submit {
                 try {
-                    // 4KB padding to force flush (proven necessary for Android/WebView)
-                    val padding = " ".repeat(4096)
-                    val heartbeat = ": keep-alive $padding\n\n".toByteArray()
                     while (isRunning) {
                         Thread.sleep(2000)
                         synchronized(pipedOut) {
@@ -379,6 +405,130 @@ class AdminWebServer(
             try { upstream.close() } catch (e: Exception) {}
             executor.shutdownNow()
         }
+    }
+
+    // ---- TrustedDocks / MQTT Gateway ----
+
+    /**
+     * POST /admin/api/gateway/connect
+     * Body: {"api_key": "..."}
+     *
+     * Validates the API key against TrustedDocks, saves config to SharedPreferences,
+     * and returns station information on success.
+     */
+    private fun handleGatewayConnect(session: IHTTPSession): Response {
+        try {
+            val map = HashMap<String, String>()
+            session.parseBody(map)
+            val jsonString = map["postData"]
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    """{"success":false,"error":"Missing request body"}""")
+
+            val reqJson = JSONObject(jsonString)
+            val apiKey = reqJson.optString("api_key", "")
+            if (apiKey.isEmpty()) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    """{"success":false,"error":"api_key is required"}""")
+            }
+
+            // Call TrustedDocks API (blocking — NanoHTTPD serves on worker threads)
+            val stationConfig = TrustedDocksApi.getStationConfig(apiKey)
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                    """{"success":false,"error":"Invalid API key or network error"}""")
+
+            // Persist to SharedPreferences
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
+            prefs.edit()
+                .putBoolean("mqtt_enabled", true)
+                .putString("mqtt_api_key", apiKey)
+                .putString("mqtt_station_name", stationConfig.portName)
+                .putInt("mqtt_antenna_id", stationConfig.antennaId)
+                .putInt("mqtt_port_id", stationConfig.portId)
+                .putString("mqtt_broker_url", stationConfig.brokerUrl)
+                .putString("mqtt_user_name", stationConfig.userName)
+                .putString("mqtt_company_name", stationConfig.companyName)
+                .apply()
+
+            // Build response
+            val result = JSONObject().apply {
+                put("success", true)
+                put("station_name", stationConfig.portName)
+                put("antenna_id", stationConfig.antennaId)
+                put("port_id", stationConfig.portId)
+                put("broker_url", stationConfig.brokerUrl)
+                put("user_name", stationConfig.userName)
+                put("company_name", stationConfig.companyName)
+            }
+
+            Log.i(TAG, "Gateway connected: station='${stationConfig.portName}'")
+            return newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in gateway/connect", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown error") }.toString())
+        }
+    }
+
+    /**
+     * GET /admin/api/gateway/status
+     *
+     * Returns current MQTT connection status, message count, and saved station info.
+     */
+    private fun handleGatewayStatus(): Response {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
+        val result = JSONObject().apply {
+            put("mqtt_enabled", prefs.getBoolean("mqtt_enabled", false))
+            put("mqtt_connected", MqttPublisher.isConnected)
+            put("mqtt_messages_sent", MqttPublisher.messagesSent)
+            put("station_name", prefs.getString("mqtt_station_name", ""))
+            put("antenna_id", prefs.getInt("mqtt_antenna_id", 0))
+            put("port_id", prefs.getInt("mqtt_port_id", 0))
+            put("broker_url", prefs.getString("mqtt_broker_url", ""))
+            put("user_name", prefs.getString("mqtt_user_name", ""))
+            put("company_name", prefs.getString("mqtt_company_name", ""))
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
+    }
+    /**
+     * GET /admin/api/health
+     *
+     * Compact health endpoint for remote dashboard monitoring.
+     * Returns all key station metrics in a single JSON response.
+     */
+    private fun handleHealth(): Response {
+        val ctx = service.applicationContext
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+        val deviceInfo = UsbDeviceScanner.scanForDevices(ctx)
+
+        val appVersion = try {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        } catch (e: Exception) { "unknown" }
+
+        val result = JSONObject().apply {
+            put("station_name", prefs.getString("pref_station_name", "") ?: "")
+            put("service_running", AisReceiverService.isRunning)
+            put("sdr_connected", AisReceiverService.hasDevice)
+            put("sdr_device", if (deviceInfo.found) deviceInfo.deviceName else "none")
+            put("ais_msg_count", AisReceiverService.messageCount)
+            put("gps_locked", GpsForwarder.hasPosition)
+            if (GpsForwarder.hasPosition) {
+                put("gps_lat", GpsForwarder.lastLatitude)
+                put("gps_lon", GpsForwarder.lastLongitude)
+            }
+            if (GpsForwarder.hasHeading) {
+                put("gps_heading", GpsForwarder.lastHeading)
+            }
+            put("mqtt_connected", MqttPublisher.isConnected)
+            put("mqtt_messages_sent", MqttPublisher.messagesSent)
+            put("mqtt_enabled", prefs.getBoolean("mqtt_enabled", false))
+            put("web_viewer_port", prefs.getString("pref_local_web_port", "8080") ?: "8080")
+            put("remote_access", prefs.getBoolean("pref_enable_remote", false))
+            put("uptime_ms", android.os.SystemClock.elapsedRealtime())
+            put("version", appVersion)
+            put("timestamp", System.currentTimeMillis())
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
     }
 
     /**

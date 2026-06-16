@@ -4,39 +4,21 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 
 /**
- * Handles USB device attach/detach events and manages permissions
+ * Handles USB device attach/detach events and manages permissions.
+ * Device support checks are delegated to [SupportedDevices].
  */
 class UsbDeviceReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "porttracker-service.USB"
         private const val ACTION_USB_PERMISSION = "com.porttracker.ais.USB_PERMISSION"
-        
-        // Supported SDR device VID/PID pairs
-        private val SUPPORTED_DEVICES = listOf(
-            // RTL-SDR dongles (various vendors)
-            Pair(0x0bda, 0x2832), // RTL2832U
-            Pair(0x0bda, 0x2838), // RTL2838
-            Pair(0x0ccd, 0x00a9), // RTL-SDR Blog V3
-            Pair(0x0ccd, 0x00b3), // RTL-SDR Blog V4
-            Pair(0x1f4d, 0xb803), // Generic RTL-SDR
-            Pair(0x1f4d, 0xc803), // Generic RTL-SDR
-            // AirSpy
-            Pair(0x1d50, 0x60a1), // AirSpy Mini/R2
-            // AirSpy HF+
-            Pair(0x03eb, 0x800c), // AirSpy HF+
-            // HackRF
-            Pair(0x1d50, 0x6089), // HackRF
-        )
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -80,7 +62,7 @@ class UsbDeviceReceiver : BroadcastReceiver() {
     private fun handleDeviceAttached(context: Context, device: UsbDevice) {
         Log.i(TAG, "USB device attached: ${device.productName} (VID=${device.vendorId}, PID=${device.productId})")
         
-        if (!isSupportedDevice(device)) {
+        if (!SupportedDevices.isSupportedDevice(device.vendorId, device.productId)) {
             Log.d(TAG, "Device not supported")
             return
         }
@@ -109,7 +91,7 @@ class UsbDeviceReceiver : BroadcastReceiver() {
     }
 
     private fun startServiceWithDevice(context: Context, device: UsbDevice) {
-        val deviceType = getDeviceType(device)
+        val deviceType = SupportedDevices.getDeviceType(device.vendorId, device.productId)
         
         Log.i(TAG, "Starting service with device: type=$deviceType, vid=${device.vendorId}, pid=${device.productId}")
         
@@ -120,45 +102,5 @@ class UsbDeviceReceiver : BroadcastReceiver() {
             putExtra("SOURCE", deviceType.ordinal)
         }
         ContextCompat.startForegroundService(context, serviceIntent)
-    }
-
-    private fun isSupportedDevice(device: UsbDevice): Boolean {
-        return SUPPORTED_DEVICES.any { it.first == device.vendorId && it.second == device.productId }
-    }
-
-    private fun getDeviceType(device: UsbDevice): DeviceType {
-        return when {
-            device.vendorId == 0x1d50 && device.productId == 0x60a1 -> DeviceType.AIRSPY
-            device.vendorId == 0x03eb && device.productId == 0x800c -> DeviceType.AIRSPYHF
-            else -> DeviceType.RTLSDR
-        }
-    }
-}
-
-/**
- * Helper class for USB device management
- */
-class UsbDeviceManager(private val context: Context) {
-    
-    private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-    
-    fun getConnectedDevices(): List<UsbDevice> {
-        return usbManager.deviceList.values.filter { device ->
-            UsbDeviceReceiver.run {
-                // Check if supported
-                true // Simplified for now
-            }
-        }
-    }
-    
-    fun openDevice(device: UsbDevice): Int? {
-        if (!usbManager.hasPermission(device)) {
-            return null
-        }
-        return usbManager.openDevice(device)?.fileDescriptor
-    }
-    
-    fun requestPermission(device: UsbDevice, callback: (Boolean) -> Unit) {
-        // Permission handling logic
     }
 }

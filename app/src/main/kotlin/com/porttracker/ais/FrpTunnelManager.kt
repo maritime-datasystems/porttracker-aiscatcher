@@ -1,10 +1,9 @@
 package com.porttracker.ais
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Manages the FRP (Fast Reverse Proxy) tunnel for remote access to the web interface.
@@ -17,25 +16,17 @@ class FrpTunnelManager(private val context: Context) {
         // FRP server configuration
         private const val FRP_SERVER_ADDR = "connect.porttracker.co"
         private const val FRP_SERVER_PORT = 7000
-        private const val FRP_AUTH_TOKEN = "porttrackerruleztheworld2026"
+    }
+    
+    private fun getAuthToken(context: Context): String {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+        return prefs.getString("frp_auth_token", "porttrackerruleztheworld2026") ?: "porttrackerruleztheworld2026"
     }
     
     private var frpProcess: Process? = null
-    @Volatile private var isRunning = false
+    private val isRunning = AtomicBoolean(false)
     
-    /**
-     * Get the appropriate binary name for the device architecture.
-     */
-    private fun getBinaryName(): String {
-        val abis = Build.SUPPORTED_ABIS
-        return when {
-            abis.any { it.contains("arm64") } -> "frpc_arm64"
-            abis.any { it.contains("x86_64") } -> "frpc_x86_64"
-            abis.any { it.contains("x86") } -> "frpc_x86"
-            abis.any { it.contains("armeabi") } -> "frpc_arm32"
-            else -> "frpc_arm64" // Fallback
-        }
-    }
+
     
     /**
      * Get the frpc binary from the native library directory.
@@ -84,7 +75,7 @@ class FrpTunnelManager(private val context: Context) {
         val configContent = """
             serverAddr = "$FRP_SERVER_ADDR"
             serverPort = $FRP_SERVER_PORT
-            auth.token = "$FRP_AUTH_TOKEN"
+            auth.token = "${getAuthToken(context)}"
             
             [[proxies]]
             name = "$subdomain"
@@ -96,7 +87,7 @@ class FrpTunnelManager(private val context: Context) {
         try {
             configFile.writeText(configContent)
             Log.i(TAG, "Config generated: ${configFile.absolutePath}")
-            Log.d(TAG, "Config content:\n$configContent")
+            Log.d(TAG, "FRP config written successfully")
             return configFile
         } catch (e: Exception) {
             Log.e(TAG, "Failed to generate config", e)
@@ -111,7 +102,7 @@ class FrpTunnelManager(private val context: Context) {
      * @return true if started successfully, false otherwise.
      */
     fun startTunnel(stationName: String, webPort: Int): Boolean {
-        if (isRunning) {
+        if (!isRunning.compareAndSet(false, true)) {
             Log.w(TAG, "Tunnel already running")
             return true
         }
@@ -136,9 +127,7 @@ class FrpTunnelManager(private val context: Context) {
             processBuilder.directory(context.filesDir)
             processBuilder.redirectErrorStream(true)
 
-            // Mark running BEFORE starting the thread to close the TOCTOU window where two
-            // concurrent startTunnel() calls both see isRunning=false and spawn two processes.
-            isRunning = true
+            // isRunning already set via compareAndSet above
 
             Thread {
                 try {
@@ -161,14 +150,14 @@ class FrpTunnelManager(private val context: Context) {
                     Log.e(TAG, "Tunnel process error", e)
                     InternalLog.log("Tunnel process error: ${e.message}")
                 } finally {
-                    isRunning = false
+                    isRunning.set(false)
                 }
             }.start()
 
             return true
 
         } catch (e: Exception) {
-            isRunning = false  // Reset if thread launch itself fails
+            isRunning.set(false)  // Reset if thread launch itself fails
             Log.e(TAG, "Failed to start tunnel", e)
             InternalLog.log("Failed to start tunnel: ${e.message}")
             return false
@@ -179,6 +168,7 @@ class FrpTunnelManager(private val context: Context) {
      * Stop the FRP tunnel.
      */
     fun stopTunnel() {
+        if (!isRunning.compareAndSet(true, false)) return
                 try {
                     frpProcess?.let { process ->
                         Log.i(TAG, "Stopping tunnel...")
@@ -200,7 +190,6 @@ class FrpTunnelManager(private val context: Context) {
                         }.start()
                     }
                     frpProcess = null
-                    isRunning = false
                     Log.i(TAG, "Tunnel stopped")
                     InternalLog.log("Tunnel stopped")
                 } catch (e: Exception) {
@@ -212,5 +201,5 @@ class FrpTunnelManager(private val context: Context) {
     /**
      * Check if the tunnel is currently running.
      */
-    fun isRunning(): Boolean = isRunning
+    fun isRunning(): Boolean = isRunning.get()
 }

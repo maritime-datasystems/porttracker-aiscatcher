@@ -7,6 +7,7 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -16,6 +17,10 @@ import java.util.concurrent.Executors
 object NetworkUtils {
     private const val TAG = "porttracker-service.Network"
     private val executor = Executors.newSingleThreadExecutor()
+    
+    private var cachedExternalIp: String? = null
+    private var lastExternalIpFetchTime = 0L
+    private const val EXTERNAL_IP_CACHE_TTL = 5 * 60 * 1000L  // 5 minutes
     
     /**
      * Get the device's local IP address on the current network
@@ -50,13 +55,25 @@ object NetworkUtils {
      * Fetch external IP address asynchronously
      */
     fun getExternalIpAddress(callback: (String) -> Unit) {
+        val now = System.currentTimeMillis()
+        val cached = cachedExternalIp
+        if (cached != null && now - lastExternalIpFetchTime < EXTERNAL_IP_CACHE_TTL) {
+            callback(cached)
+            return
+        }
         executor.execute {
             try {
-                val externalIp = URL("https://api.ipify.org").readText().trim()
+                val conn = URL("https://api.ipify.org").openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                val externalIp = conn.inputStream.bufferedReader().readText().trim()
+                conn.disconnect()
+                cachedExternalIp = externalIp
+                lastExternalIpFetchTime = System.currentTimeMillis()
                 callback(externalIp)
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching external IP", e)
-                callback("Unknown")
+                callback(cachedExternalIp ?: "Unknown")  // Return stale cache on error
             }
         }
     }

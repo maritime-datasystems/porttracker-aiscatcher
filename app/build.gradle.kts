@@ -17,12 +17,6 @@ android {
         versionCode = 22
         versionName = "3.0-${LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMdd-HHmm"))}"
 
-        externalNativeBuild {
-            cmake {
-                cppFlags += ""
-            }
-        }
-        
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -30,7 +24,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -69,4 +63,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
 }

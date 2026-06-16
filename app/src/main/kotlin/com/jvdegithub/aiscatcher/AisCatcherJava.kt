@@ -24,6 +24,10 @@ object AisCatcherJava {
         }
     }
     
+    private fun ensureLibraryLoaded() {
+        if (!isLibraryLoaded) throw IllegalStateException("AIS-catcher native library not loaded")
+    }
+    
     // Statistics inner class for JNI callbacks
     object Statistics {
         @JvmField var DataB: Int = 0
@@ -47,7 +51,6 @@ object AisCatcherJava {
     // Callbacks from native code
     @JvmStatic
     fun onNMEA(nmea: String) {
-        Log.d(TAG, "NMEA: $nmea")
         com.porttracker.ais.AisReceiverService.onNMEA(nmea)
     }
     
@@ -75,6 +78,12 @@ object AisCatcherJava {
     
     // Native methods
     @JvmStatic
+    fun InitNativeSafe(webServerPort: Int, bindAddress: String): Int {
+        ensureLibraryLoaded()
+        return InitNative(webServerPort, bindAddress)
+    }
+    
+    @JvmStatic
     external fun InitNative(webServerPort: Int, bindAddress: String): Int
     
     @JvmStatic
@@ -82,6 +91,12 @@ object AisCatcherJava {
     
     @JvmStatic
     external fun applySetting(device: String, setting: String, value: String): Int
+    
+    @JvmStatic
+    fun RunSafe(): Int {
+        ensureLibraryLoaded()
+        return Run()
+    }
     
     @JvmStatic
     external fun Run(): Int

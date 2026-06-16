@@ -2,15 +2,17 @@ package com.porttracker.ais
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
 class ConfigurationManager(private val context: Context) {
 
+    companion object {
+        private const val TAG = "porttracker-service.Config"
+    }
+
     private val prefs: SharedPreferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
-    private val gson = Gson()
 
     fun getAllConfig(): JSONObject {
         val json = JSONObject()
@@ -23,8 +25,8 @@ class ConfigurationManager(private val context: Context) {
                 is Long -> json.put(key, value)
                 is Float -> json.put(key, value)
                 is String -> json.put(key, value)
-                // Sets are trickier, ignoring for now or converting to array
                 is Set<*> -> json.put(key, JSONArray(value))
+                else -> Log.w(TAG, "getAllConfig: skipping key '$key' with unsupported type ${value?.javaClass}")
             }
         }
         return json
@@ -56,17 +58,35 @@ class ConfigurationManager(private val context: Context) {
                     existingValue is String -> editor.putString(key, jsonValue.toString())
                     // Existing pref is Int
                     existingValue is Int -> editor.putInt(key, jsonValue.toString().toIntOrNull() ?: 0)
+                    // Existing pref is Long
+                    existingValue is Long -> editor.putLong(key, jsonValue.toString().toLongOrNull() ?: 0L)
+                    // Existing pref is Float
+                    existingValue is Float -> editor.putFloat(key, jsonValue.toString().toFloatOrNull() ?: 0f)
+                    // Existing pref is Set<String>
+                    existingValue is Set<*> -> {
+                        val jsonArray = jsonObject.optJSONArray(key)
+                        if (jsonArray != null) {
+                            val set = mutableSetOf<String>()
+                            for (i in 0 until jsonArray.length()) {
+                                set.add(jsonArray.getString(i))
+                            }
+                            editor.putStringSet(key, set)
+                        } else {
+                            Log.w(TAG, "updateConfig: expected JSONArray for Set key '$key', got ${jsonValue.javaClass.simpleName}")
+                        }
+                    }
                     // No existing pref — infer storage type from JSON type
                     jsonValue is Boolean -> editor.putBoolean(key, jsonValue)
                     jsonValue is Int     -> editor.putString(key, jsonValue.toString())
                     jsonValue is Double  -> editor.putString(key, jsonValue.toString())
                     jsonValue is String  -> editor.putString(key, jsonValue)
+                    else -> Log.w(TAG, "updateConfig: unhandled key '$key' with type ${jsonValue.javaClass.simpleName}")
                 }
             }
             editor.apply()
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to update config", e)
             false
         }
     }

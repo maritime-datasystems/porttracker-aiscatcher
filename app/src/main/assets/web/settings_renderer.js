@@ -19,7 +19,11 @@ var SettingsRenderer = {
             this.currentConfig = await response.json();
             this.render();
         } catch (e) {
-            container.innerHTML = `<div class="alert alert-danger">Error loading settings: ${e.message}</div>`;
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'alert alert-danger';
+            errorDiv.textContent = 'Error loading settings: ' + e.message;
+            container.innerHTML = '';
+            container.appendChild(errorDiv);
         }
     },
 
@@ -44,7 +48,7 @@ var SettingsRenderer = {
                     <button class="nav-link" id="tab-location" data-bs-toggle="tab" data-bs-target="#pane-location" type="button">Location</button>
                 </li>
                 <li class="nav-item">
-                    <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">porttracker.co</button>
+                    <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">TrustedDocks</button>
                 </li>
                 <li class="nav-item">
                     <button class="nav-link" id="tab-database" data-bs-toggle="tab" data-bs-target="#pane-database" type="button">Internal DB</button>
@@ -79,6 +83,9 @@ var SettingsRenderer = {
                 } else {
                     this.stopSdrAutoRefresh();
                 }
+                if (e.target.id === 'tab-porttracker') {
+                    this.refreshGatewayStatus();
+                }
             });
         });
     },
@@ -87,13 +94,16 @@ var SettingsRenderer = {
 
     renderStatusPane: function () {
         // This is a static view of the current config values deemed "Status" related
-        // Note: Real-time status is handled by the Status Page, this is just config view
+        const remoteEnabled = this.bool('pref_enable_remote');
+        const mqttEnabled = this.bool('mqtt_enabled');
         return `
             <h5>Application Info</h5>
             <table class="table table-bordered">
                 <tr><th>Version</th><td>${this.val('app_version', 'Unknown')}</td></tr>
                 <tr><th>Device Type</th><td>${this.getDeviceTypeName(this.val('device_type', '1'))}</td></tr>
                 <tr><th>Web Server Port</th><td>${this.val('pref_local_web_port', '8080')}</td></tr>
+                <tr><th>Remote Access</th><td>${remoteEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
+                <tr><th>MQTT Publishing</th><td>${mqttEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
             </table>
         `;
     },
@@ -194,11 +204,11 @@ var SettingsRenderer = {
             <div class="mb-3">
                 <label class="form-label">Device Type</label>
                 <select class="form-select" id="device_type">
-                    <option value="1" ${this.val('device_type') == '1' ? 'selected' : ''}>RTL-SDR</option>
-                    <option value="0" ${this.val('device_type') == '0' ? 'selected' : ''}>RTL-TCP</option>
-                    <option value="2" ${this.val('device_type') == '2' ? 'selected' : ''}>AirSpy</option>
-                    <option value="3" ${this.val('device_type') == '3' ? 'selected' : ''}>AirSpy HF+</option>
-                    <option value="4" ${this.val('device_type') == '4' ? 'selected' : ''}>SpyServer</option>
+                    <option value="1" ${this.val('device_type') === '1' ? 'selected' : ''}>RTL-SDR</option>
+                    <option value="0" ${this.val('device_type') === '0' ? 'selected' : ''}>RTL-TCP</option>
+                    <option value="2" ${this.val('device_type') === '2' ? 'selected' : ''}>AirSpy</option>
+                    <option value="3" ${this.val('device_type') === '3' ? 'selected' : ''}>AirSpy HF+</option>
+                    <option value="4" ${this.val('device_type') === '4' ? 'selected' : ''}>SpyServer</option>
                 </select>
             </div>
             <div class="mb-3">
@@ -374,47 +384,102 @@ var SettingsRenderer = {
     },
 
     renderPorttrackerPane: function () {
-        const isConnected = this.bool('porttracker_connected');
-        const statusClass = isConnected ? 'text-success' : 'text-danger';
-        const statusText = isConnected ? '✅ Connected' : '❌ Not Connected';
-        const stationName = this.val('porttracker_station', '');
-        const connectUrl = stationName ? `${stationName}.connect.porttracker.co` : '[stationname].connect.porttracker.co';
+        const mqttEnabled = this.bool('mqtt_enabled');
+        const stationName = this.val('mqtt_station_name', '');
+        const brokerUrl = this.val('mqtt_broker_url', 'ssl://mqtt.navisense.de:8883');
+        const mqttUsername = this.val('mqtt_username', '');
+        const mqttPassword = this.val('mqtt_password', '');
+        const antennaUuid = this.val('mqtt_antenna_uuid', '');
+        const mqttTopicRaw = this.val('mqtt_topic_raw', '');
+        const mqttTopicJson = this.val('mqtt_topic_json', '');
+        const mqttFormat = this.val('mqtt_format', 'aisc-json');
 
         return `
-            <h5><i class="bi bi-globe"></i> PortTracker.co Integration</h5>
-            <p class="text-muted small">Connect your station to the PortTracker.co cloud service for remote monitoring and data sharing.</p>
-            
-            <div class="mb-3">
-                <label class="form-label">Username</label>
-                <input type="text" class="form-control" id="porttracker_username" value="${this.val('porttracker_username')}" placeholder="Your porttracker.co username">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Password</label>
-                <input type="password" class="form-control" id="porttracker_password" value="${this.val('porttracker_password')}" placeholder="Your porttracker.co password">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Station Name</label>
-                <input type="text" class="form-control" id="porttracker_station" value="${stationName}" placeholder="my-station-1">
-                <div class="form-text">Your station will be accessible at: <code>${connectUrl}</code></div>
-            </div>
-            <hr>
-            <div class="mb-3 form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="porttracker_enabled" ${this.bool('porttracker_enabled') ? 'checked' : ''}>
-                <label class="form-check-label" for="porttracker_enabled"><strong>Enable PortTracker Connect</strong></label>
-            </div>
+            <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
+            <p class="text-muted small">Connect your AIS station to the TrustedDocks MQTT gateway for real-time data sharing. 
+            Enter the credentials from your <strong>TrustedDocks AIS Station</strong> page.</p>
             
             <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-key"></i> MQTT Credentials</div>
                 <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <strong>Status:</strong> <span class="${statusClass}" id="porttracker_status_text">${statusText}</span>
+                    <div class="mb-3">
+                        <label class="form-label">Antenna UUID</label>
+                        <input type="text" class="form-control font-monospace" id="mqtt_antenna_uuid" 
+                            value="${antennaUuid}" placeholder="e.g. 54BBB8">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Protocol / Broker URL</label>
+                        <input type="text" class="form-control font-monospace" id="mqtt_broker_url" 
+                            value="${brokerUrl}" placeholder="ssl://mqtt.navisense.de:8883">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-control font-monospace" id="mqtt_username" 
+                            value="${mqttUsername}" placeholder="e.g. data-sharing-user-2539895">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control font-monospace" id="mqtt_password" 
+                                value="${mqttPassword}" placeholder="Your MQTT password">
+                            <button class="btn btn-outline-secondary" type="button" 
+                                onclick="const i=document.getElementById('mqtt_password'); i.type = i.type==='password' ? 'text' : 'password'">
+                                <i class="bi bi-eye"></i>
+                            </button>
                         </div>
-                        <button class="btn btn-primary" onclick="SettingsRenderer.connectPorttracker()" id="porttracker_connect_btn">
-                            <i class="bi bi-plug"></i> ${isConnected ? 'Reconnect' : 'Connect'}
-                        </button>
+                        <div class="form-text text-warning"><i class="bi bi-exclamation-triangle"></i> Password is shown only once at station creation. Save it!</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">AIS Raw Topic</label>
+                        <input type="text" class="form-control font-monospace" id="mqtt_topic_raw" 
+                            value="${mqttTopicRaw}" placeholder="e.g. ais/raw/SHARE/4/1000005">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">AIS JSON Topic</label>
+                        <input type="text" class="form-control font-monospace" id="mqtt_topic_json" 
+                            value="${mqttTopicJson}" placeholder="e.g. ais/aisc-json/SHARE/4/1000005">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Publish Format</label>
+                        <select class="form-select" id="mqtt_format">
+                            <option value="aisc-json" ${mqttFormat === 'aisc-json' ? 'selected' : ''}>AIS JSON (aisc-json) — recommended</option>
+                            <option value="raw" ${mqttFormat === 'raw' ? 'selected' : ''}>Raw NMEA</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Station Name (optional)</label>
+                        <input type="text" class="form-control" id="mqtt_station_name" 
+                            value="${stationName}" placeholder="e.g. My AIS Station">
                     </div>
                 </div>
             </div>
+            
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-info-circle"></i> Connection Status</div>
+                <div class="card-body">
+                    <table class="table table-bordered mb-0">
+                        <tr>
+                            <th style="width:40%">MQTT Status</th>
+                            <td id="gateway_mqtt_status">
+                                <span class="text-muted">—</span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Messages Sent</th>
+                            <td><span class="badge bg-info fs-6" id="gateway_msg_count">0</span></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            
+            <div class="mb-3 form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="mqtt_enabled" ${mqttEnabled ? 'checked' : ''}>
+                <label class="form-check-label" for="mqtt_enabled"><strong>Enable MQTT Publishing</strong></label>
+            </div>
+            
+            <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshGatewayStatus()">
+                <i class="bi bi-arrow-clockwise"></i> Refresh Status
+            </button>
         `;
     },
 
@@ -473,7 +538,7 @@ var SettingsRenderer = {
             if (el.type === 'checkbox') {
                 newConfig[id] = el.checked;
             } else {
-                newConfig[id] = type === 'int' ? parseInt(el.value) : el.value;
+                newConfig[id] = type === 'int' ? parseInt(el.value, 10) : el.value;
             }
         };
 
@@ -496,11 +561,16 @@ var SettingsRenderer = {
             collect(`udp${i}_port`, 'int');
         }
 
-        // Collect PortTracker.co settings
-        collect('porttracker_username');
-        collect('porttracker_password');
-        collect('porttracker_station');
-        collect('porttracker_enabled', 'bool');
+        // Collect TrustedDocks / MQTT settings
+        collect('mqtt_enabled', 'bool');
+        collect('mqtt_broker_url');
+        collect('mqtt_username');
+        collect('mqtt_password');
+        collect('mqtt_antenna_uuid');
+        collect('mqtt_topic_raw');
+        collect('mqtt_topic_json');
+        collect('mqtt_format');
+        collect('mqtt_station_name');
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');
@@ -552,57 +622,27 @@ var SettingsRenderer = {
         }
     },
 
-    connectPorttracker: async function () {
-        const username = document.getElementById('porttracker_username')?.value || '';
-        const password = document.getElementById('porttracker_password')?.value || '';
-        const station = document.getElementById('porttracker_station')?.value || '';
-
-        if (!username || !password || !station) {
-            alert('Please fill in all PortTracker.co fields (username, password, station name)');
-            return;
-        }
-
-        const btn = document.getElementById('porttracker_connect_btn');
-        const statusText = document.getElementById('porttracker_status_text');
-
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Connecting...';
-        }
-
+    refreshGatewayStatus: async function () {
         try {
-            const response = await fetch('/admin/api/porttracker/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password, station })
-            });
+            const response = await fetch('/admin/api/gateway/status');
+            const status = await response.json();
 
-            const result = await response.json();
-
-            if (result.success) {
-                if (statusText) {
-                    statusText.className = 'text-success';
-                    statusText.textContent = '✅ Connected';
+            const mqttStatusEl = document.getElementById('gateway_mqtt_status');
+            if (mqttStatusEl) {
+                if (status.mqtt_connected) {
+                    mqttStatusEl.innerHTML = '<span class="text-success">🟢 Connected</span>';
+                } else if (status.mqtt_enabled) {
+                    mqttStatusEl.innerHTML = '<span class="text-warning">🟡 Enabled (reconnecting...)</span>';
+                } else {
+                    mqttStatusEl.innerHTML = '<span class="text-secondary">⚪ Disabled</span>';
                 }
-                if (btn) {
-                    btn.innerHTML = '<i class="bi bi-plug"></i> Reconnect';
-                }
-            } else {
-                throw new Error(result.error || 'Connection failed');
             }
+
+            const msgEl = document.getElementById('gateway_msg_count');
+            if (msgEl) msgEl.textContent = status.mqtt_messages_sent || 0;
+
         } catch (e) {
-            if (statusText) {
-                statusText.className = 'text-danger';
-                statusText.textContent = '❌ ' + e.message;
-            }
-            alert('Connection failed: ' + e.message);
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                if (btn.innerHTML.includes('Connecting')) {
-                    btn.innerHTML = '<i class="bi bi-plug"></i> Connect';
-                }
-            }
+            console.error('Failed to refresh gateway status:', e);
         }
     },
 
