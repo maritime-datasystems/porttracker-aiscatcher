@@ -313,15 +313,37 @@ class AisReceiverService : Service() {
             }
             
             if (restartRequested.get()) {
-                Log.i(TAG, "Engine restart requested (config change)")
-                scheduleServiceRestart(2000)
-                return
+                Log.i(TAG, "Engine restart requested (config change) — restarting in-process")
+                // Don't kill the service — keep web server alive
+                // Re-run the engine after a brief delay in a new thread
+                Thread.sleep(2000)
+                val newConfig = ServiceConfig.fromPreferences(this)
+                restartRequested.set(false)
+                Log.i(TAG, "Re-running engine with updated config...")
+                runNativeEngine(newConfig, currentSource, fileDescriptor)
+                // If engine exits again after restart, fall through to unexpected exit
             }
             
             // Unexpected exit (USB disconnect, crash, etc.)
-            // Schedule a full service restart in a new process
-            Log.w(TAG, "Engine exited unexpectedly. Scheduling service restart in 5s...")
-            scheduleServiceRestart(5000)
+            if (!shouldStop.get() && !restartRequested.get()) {
+                Log.w(TAG, "Engine exited unexpectedly. Entering web-only keep-alive...")
+                updateNotification("SDR disconnected — Web server running")
+                // Stay alive for web server instead of killing the process
+                while (!shouldStop.get() && !restartRequested.get()) {
+                    try {
+                        Thread.sleep(1000)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                }
+                if (restartRequested.get()) {
+                    Log.i(TAG, "Restart requested during keep-alive, re-running engine...")
+                    Thread.sleep(1000)
+                    val newConfig = ServiceConfig.fromPreferences(this)
+                    restartRequested.set(false)
+                    runNativeEngine(newConfig, currentSource, fileDescriptor)
+                }
+            }
             
         } finally {
             isRunning = false
