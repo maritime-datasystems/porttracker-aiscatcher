@@ -122,6 +122,7 @@ class SettingsActivity : AppCompatActivity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
             webViewClient = object : WebViewClient() {
                 override fun onReceivedError(
                     view: WebView?,
