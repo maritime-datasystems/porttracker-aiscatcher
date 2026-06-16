@@ -558,6 +558,12 @@ class AdminWebServer(
         if (!authEnabled) {
             return null // Auth disabled, allow access
         }
+
+        // Always allow local access (in-app WebView uses 127.0.0.1)
+        val remoteIp = session.headers["remote-addr"] ?: session.headers["http-client-ip"] ?: ""
+        if (remoteIp == "127.0.0.1" || remoteIp == "::1" || remoteIp.startsWith("127.")) {
+            return null // Local access, skip auth
+        }
         
         val requiredUsername = prefs.getString("web_auth_username", "") ?: ""
         val requiredPassword = prefs.getString("web_auth_password", "") ?: ""
