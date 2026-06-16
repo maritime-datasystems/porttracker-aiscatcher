@@ -396,8 +396,21 @@ var SettingsRenderer = {
 
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
-            <p class="text-muted small">Connect your AIS station to the TrustedDocks MQTT gateway for real-time data sharing. 
-            Enter the credentials from your <strong>TrustedDocks AIS Station</strong> page.</p>
+            
+            <!-- Quick Setup via QR Code -->
+            <div class="card mb-3 border-primary">
+                <div class="card-header bg-primary text-white"><i class="bi bi-qr-code-scan"></i> Quick Setup</div>
+                <div class="card-body text-center">
+                    <p class="mb-3">Scan the QR code from your <strong>TrustedDocks Station</strong> page to auto-fill all credentials.</p>
+                    <button class="btn btn-primary btn-lg" onclick="SettingsRenderer.startQrScanner()">
+                        <i class="bi bi-camera"></i> Scan Station QR Code
+                    </button>
+                    <div id="qr-reader" style="display:none; margin-top: 15px; max-width: 400px; margin-left:auto; margin-right:auto;"></div>
+                    <div id="qr-status" style="display:none; margin-top:10px;"></div>
+                </div>
+            </div>
+            
+            <p class="text-muted small">Or enter credentials manually from your <strong>TrustedDocks AIS Station</strong> page.</p>
             
             <div class="card mb-3">
                 <div class="card-header"><i class="bi bi-key"></i> MQTT Credentials</div>
@@ -841,6 +854,102 @@ var SettingsRenderer = {
             );
         } else {
             alert('Geolocation is not supported by this browser');
+        }
+    },
+
+    // --- QR Code Scanner for TrustedDocks Provisioning ---
+    _qrScanner: null,
+
+    startQrScanner: function () {
+        const readerDiv = document.getElementById('qr-reader');
+        const statusDiv = document.getElementById('qr-status');
+        if (!readerDiv) return;
+
+        // If scanner is already running, stop it
+        if (this._qrScanner) {
+            this.stopQrScanner();
+            return;
+        }
+
+        readerDiv.style.display = 'block';
+        statusDiv.style.display = 'block';
+        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-camera-video"></i> Point camera at QR code...</span>';
+
+        try {
+            this._qrScanner = new Html5Qrcode("qr-reader");
+            this._qrScanner.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                (decodedText) => {
+                    this.handleQrResult(decodedText);
+                },
+                (errorMessage) => {
+                    // Scan in progress, ignore per-frame errors
+                }
+            ).catch((err) => {
+                statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> Camera error: ' + err + '</span>';
+            });
+        } catch (e) {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> Scanner error: ' + e.message + '</span>';
+        }
+    },
+
+    stopQrScanner: function () {
+        if (this._qrScanner) {
+            this._qrScanner.stop().then(() => {
+                this._qrScanner.clear();
+                this._qrScanner = null;
+            }).catch(() => {
+                this._qrScanner = null;
+            });
+        }
+        const readerDiv = document.getElementById('qr-reader');
+        if (readerDiv) readerDiv.style.display = 'none';
+    },
+
+    handleQrResult: function (text) {
+        this.stopQrScanner();
+        const statusDiv = document.getElementById('qr-status');
+
+        try {
+            const data = JSON.parse(text);
+            
+            // Validate it's a TrustedDocks provisioning QR
+            if (!data.v || !data.broker || !data.username) {
+                statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Invalid QR code — not a TrustedDocks station QR.</span>';
+                return;
+            }
+
+            // Auto-fill all fields
+            const fieldMap = {
+                'mqtt_broker_url': data.broker || '',
+                'mqtt_username': data.username || '',
+                'mqtt_password': data.password || '',
+                'mqtt_antenna_uuid': data.antenna_uuid || '',
+                'mqtt_topic_raw': data.topic_ais_raw || '',
+                'mqtt_topic_json': data.topic_ais_json || '',
+                'mqtt_station_name': data.station_name || '',
+            };
+
+            for (const [id, value] of Object.entries(fieldMap)) {
+                const el = document.getElementById(id);
+                if (el && value) {
+                    el.value = value;
+                    el.classList.add('border-success');
+                    setTimeout(() => el.classList.remove('border-success'), 3000);
+                }
+            }
+
+            // Show success
+            statusDiv.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle-fill"></i> 
+                    <strong>Station "${data.station_name || 'Unknown'}" configured!</strong><br>
+                    All credentials have been filled in. Click <strong>Save & Restart Service</strong> to activate.
+                </div>
+            `;
+        } catch (e) {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not parse QR code: ' + e.message + '</span>';
         }
     }
 };
