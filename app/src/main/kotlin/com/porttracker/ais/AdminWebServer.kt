@@ -59,8 +59,13 @@ class AdminWebServer(
             return handleAdminApi(session)
         }
 
+        // 1.5 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
+        if (uri == "/api/sse" || uri == "/admin/api/nmea_stream") {
+            return handleNmeaSse()
+        }
+
         // 2. Reverse Proxy for Internal C++ API
-        // Forward stats, metrics, tile requests, and SSE to the internal server
+        // Forward stats, metrics, tile requests to the internal server
         if (shouldProxy(uri)) {
             return proxyToInternalServer(session)
         }
@@ -420,6 +425,70 @@ class AdminWebServer(
             try { upstream.close() } catch (e: Exception) {}
             executor.shutdownNow()
         }
+    }
+
+    // ---- Direct NMEA SSE Stream ----
+
+    /**
+     * Serves live NMEA sentences as Server-Sent Events.
+     * Uses the native NMEAListener callback system directly,
+     * bypassing the C++ web server's SSE endpoint.
+     */
+    private fun handleNmeaSse(): Response {
+        val pipedOut = java.io.PipedOutputStream()
+        val pipedIn = java.io.PipedInputStream(pipedOut, 8192)
+        val isOpen = java.util.concurrent.atomic.AtomicBoolean(true)
+
+        val listener = object : AisReceiverService.Companion.NMEAListener {
+            override fun onNMEA(nmea: String) {
+                if (!isOpen.get()) return
+                try {
+                    val sseEvent = "data: $nmea\n\n"
+                    synchronized(pipedOut) {
+                        pipedOut.write(sseEvent.toByteArray())
+                        pipedOut.flush()
+                    }
+                } catch (e: Exception) {
+                    isOpen.set(false)
+                    AisReceiverService.removeNMEAListener(this)
+                    try { pipedOut.close() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        AisReceiverService.addNMEAListener(listener)
+        Log.i(TAG, "NMEA SSE client connected")
+
+        // Heartbeat thread to keep the connection alive and detect disconnects
+        Thread {
+            try {
+                while (isOpen.get()) {
+                    Thread.sleep(3000)
+                    synchronized(pipedOut) {
+                        pipedOut.write(": heartbeat\n\n".toByteArray())
+                        pipedOut.flush()
+                    }
+                }
+            } catch (e: Exception) {
+                // Client disconnected
+            } finally {
+                isOpen.set(false)
+                AisReceiverService.removeNMEAListener(listener)
+                try { pipedOut.close() } catch (_: Exception) {}
+                Log.i(TAG, "NMEA SSE client disconnected")
+            }
+        }.start()
+
+        val response = newFixedLengthResponse(
+            Response.Status.OK,
+            "text/event-stream",
+            pipedIn,
+            -1  // Chunked transfer
+        )
+        response.addHeader("Cache-Control", "no-cache")
+        response.addHeader("X-Accel-Buffering", "no")
+        response.addHeader("Connection", "keep-alive")
+        return response
     }
 
     // ---- TrustedDocks / MQTT Gateway ----
