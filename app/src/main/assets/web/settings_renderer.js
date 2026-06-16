@@ -397,20 +397,20 @@ var SettingsRenderer = {
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
             
-            <!-- Quick Setup via QR Code -->
-            <div class="card mb-3 border-primary">
-                <div class="card-header bg-primary text-white"><i class="bi bi-qr-code-scan"></i> Quick Setup</div>
-                <div class="card-body text-center">
-                    <p class="mb-3">Scan the QR code from your <strong>TrustedDocks Station</strong> page to auto-fill all credentials.</p>
-                    <button class="btn btn-primary btn-lg" onclick="SettingsRenderer.startQrScanner()">
-                        <i class="bi bi-camera"></i> Scan Station QR Code
+            <!-- Quick Setup via Paste Config -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-clipboard-plus"></i> Paste Station Config</h6>
+                    <p class="text-muted" style="font-size:0.85em">Copy the config from your <a href="https://www.trusteddocks.com/account/ais-stations" target="_blank">TrustedDocks account</a> and paste it below:</p>
+                    <textarea id="station-config-paste" class="form-control font-monospace" rows="8" placeholder="[TrustedDocks Station]\nstation_name = ...\nbroker = ...\nusername = ...\npassword = ...\ntopic_ais_raw = ...\ntopic_ais_json = ..."></textarea>
+                    <button class="btn btn-primary mt-2" onclick="SettingsRenderer.applyPastedConfig()">
+                        <i class="bi bi-check-lg"></i> Apply Config
                     </button>
-                    <div id="qr-reader" style="display:none; margin-top: 15px; max-width: 400px; margin-left:auto; margin-right:auto;"></div>
-                    <div id="qr-status" style="display:none; margin-top:10px;"></div>
+                    <div id="paste-config-status" class="mt-2"></div>
                 </div>
             </div>
             
-            <p class="text-muted small">Or enter credentials manually from your <strong>TrustedDocks AIS Station</strong> page.</p>
+            <p class="text-muted small">Or enter credentials manually below.</p>
             
             <div class="card mb-3">
                 <div class="card-header"><i class="bi bi-key"></i> MQTT Credentials</div>
@@ -857,139 +857,71 @@ var SettingsRenderer = {
         }
     },
 
-    // --- QR Code Scanner for TrustedDocks Provisioning ---
-    _qrScanner: null,
+    // --- Paste Config for TrustedDocks Provisioning ---
 
-    startQrScanner: function () {
-        const readerDiv = document.getElementById('qr-reader');
-        const statusDiv = document.getElementById('qr-status');
-        if (!readerDiv) return;
+    applyPastedConfig: function () {
+        const textarea = document.getElementById('station-config-paste');
+        const statusDiv = document.getElementById('paste-config-status');
+        if (!textarea || !statusDiv) return;
 
-        // If scanner is already running, stop it
-        if (this._qrScanner) {
-            this.stopQrScanner();
+        const text = textarea.value.trim();
+        if (!text) {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Please paste a config snippet first.</span>';
             return;
         }
 
-        readerDiv.style.display = 'block';
-        statusDiv.style.display = 'block';
-        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-camera-video"></i> Starting camera...</span>';
-
-        try {
-            this._qrScanner = new Html5Qrcode("qr-reader");
-            this._qrScanner.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                (decodedText) => {
-                    this.handleQrResult(decodedText);
-                },
-                (errorMessage) => {
-                    // Scan in progress, ignore per-frame errors
-                }
-            ).catch((err) => {
-                // Camera failed (likely HTTP context) — show file upload fallback
-                this._qrScanner = null;
-                this._showQrFileFallback(readerDiv, statusDiv);
-            });
-        } catch (e) {
-            this._qrScanner = null;
-            this._showQrFileFallback(readerDiv, statusDiv);
+        // Parse INI-like config
+        const parsed = {};
+        const lines = text.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('[')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx === -1) continue;
+            const key = trimmed.substring(0, eqIdx).trim();
+            const value = trimmed.substring(eqIdx + 1).trim();
+            parsed[key] = value;
         }
-    },
 
-    _showQrFileFallback: function(readerDiv, statusDiv) {
-        statusDiv.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Camera not available (requires HTTPS). Use the button below to take a photo of the QR code instead.</span>';
-        readerDiv.innerHTML = `
-            <div class="text-center p-3">
-                <label class="btn btn-outline-primary btn-lg" style="cursor:pointer">
-                    <i class="bi bi-camera"></i> Take Photo / Choose Image
-                    <input type="file" accept="image/*" capture="environment" 
-                           style="display:none" 
-                           onchange="SettingsRenderer._handleQrFile(event)">
-                </label>
-                <p class="text-muted mt-2 mb-0" style="font-size:0.85em">Take a photo of the station QR code or select an image from your gallery.</p>
-            </div>
-        `;
-    },
+        // Map config keys to form field IDs
+        const fieldMap = {
+            'station_name': 'mqtt_station_name',
+            'antenna_uuid': 'mqtt_antenna_uuid',
+            'broker': 'mqtt_broker_url',
+            'username': 'mqtt_username',
+            'password': 'mqtt_password',
+            'topic_ais_raw': 'mqtt_topic_raw',
+            'topic_ais_json': 'mqtt_topic_json'
+        };
 
-    _handleQrFile: async function(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-        const statusDiv = document.getElementById('qr-status');
-        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-hourglass-split"></i> Scanning image...</span>';
-        try {
-            const scanner = new Html5Qrcode("qr-reader-file-tmp");
-            // Create a temporary hidden div for the scanner
-            let tmpDiv = document.getElementById('qr-reader-file-tmp');
-            if (!tmpDiv) {
-                tmpDiv = document.createElement('div');
-                tmpDiv.id = 'qr-reader-file-tmp';
-                tmpDiv.style.display = 'none';
-                document.body.appendChild(tmpDiv);
-            }
-            const result = await scanner.scanFile(file, true);
-            SettingsRenderer.handleQrResult(result);
-        } catch (e) {
-            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not find QR code in image. Try again with a clearer photo.</span>';
-        }
-    },
-
-    stopQrScanner: function () {
-        if (this._qrScanner) {
-            this._qrScanner.stop().then(() => {
-                this._qrScanner.clear();
-                this._qrScanner = null;
-            }).catch(() => {
-                this._qrScanner = null;
-            });
-        }
-        const readerDiv = document.getElementById('qr-reader');
-        if (readerDiv) readerDiv.style.display = 'none';
-    },
-
-    handleQrResult: function (text) {
-        this.stopQrScanner();
-        const statusDiv = document.getElementById('qr-status');
-
-        try {
-            const data = JSON.parse(text);
-            
-            // Validate it's a TrustedDocks provisioning QR
-            if (!data.v || !data.broker || !data.username) {
-                statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Invalid QR code — not a TrustedDocks station QR.</span>';
-                return;
-            }
-
-            // Auto-fill all fields
-            const fieldMap = {
-                'mqtt_broker_url': data.broker || '',
-                'mqtt_username': data.username || '',
-                'mqtt_password': data.password || '',
-                'mqtt_antenna_uuid': data.antenna_uuid || '',
-                'mqtt_topic_raw': data.topic_ais_raw || '',
-                'mqtt_topic_json': data.topic_ais_json || '',
-                'mqtt_station_name': data.station_name || '',
-            };
-
-            for (const [id, value] of Object.entries(fieldMap)) {
-                const el = document.getElementById(id);
-                if (el && value) {
-                    el.value = value;
-                    el.classList.add('border-success');
-                    setTimeout(() => el.classList.remove('border-success'), 3000);
+        let filled = 0;
+        for (const [configKey, fieldId] of Object.entries(fieldMap)) {
+            if (parsed[configKey]) {
+                const el = document.getElementById(fieldId);
+                if (el) {
+                    el.value = parsed[configKey];
+                    el.style.borderColor = '#198754';
+                    el.style.boxShadow = '0 0 0 0.2rem rgba(25,135,84,0.25)';
+                    setTimeout(() => {
+                        el.style.borderColor = '';
+                        el.style.boxShadow = '';
+                    }, 3000);
+                    filled++;
                 }
             }
+        }
 
-            // Show success
+        if (filled > 0) {
+            const name = parsed['station_name'] || 'Unknown';
             statusDiv.innerHTML = `
                 <div class="alert alert-success">
-                    <i class="bi bi-check-circle-fill"></i> 
-                    <strong>Station "${data.station_name || 'Unknown'}" configured!</strong><br>
-                    All credentials have been filled in. Click <strong>Save & Restart Service</strong> to activate.
+                    <i class="bi bi-check-circle-fill"></i>
+                    <strong>Station "${name}" configured!</strong><br>
+                    ${filled} fields filled. Click <strong>Save & Restart Service</strong> to activate.
                 </div>
             `;
-        } catch (e) {
-            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not parse QR code: ' + e.message + '</span>';
+        } else {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not parse any fields from the pasted config. Check the format.</span>';
         }
     }
 };
