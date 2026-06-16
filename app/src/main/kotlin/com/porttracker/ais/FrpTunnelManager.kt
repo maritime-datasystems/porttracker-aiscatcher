@@ -14,7 +14,7 @@ class FrpTunnelManager(private val context: Context) {
         private const val TAG = "porttracker-service.FRP"
         
         // FRP server configuration
-        private const val FRP_SERVER_ADDR = "connect.porttracker.co"
+        private const val FRP_SERVER_ADDR = "5.75.129.207"
         private const val FRP_SERVER_PORT = 7000
     }
     
@@ -76,6 +76,7 @@ class FrpTunnelManager(private val context: Context) {
             serverAddr = "$FRP_SERVER_ADDR"
             serverPort = $FRP_SERVER_PORT
             auth.token = "${getAuthToken(context)}"
+            loginFailExit = false
             
             [[proxies]]
             name = "$subdomain"
