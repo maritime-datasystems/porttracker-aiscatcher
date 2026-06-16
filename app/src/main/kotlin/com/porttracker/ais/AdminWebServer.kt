@@ -155,7 +155,15 @@ class AdminWebServer(
         
         if (session.method == Method.POST && session.uri == "/admin/api/service/stop") {
             try {
-                service.stopSelf()
+                // Only stop the SDR engine, NOT the whole service — web server must stay alive
+                Thread {
+                    try {
+                        AisReceiverService.hasDevice = false
+                        com.jvdegithub.aiscatcher.AisCatcherJava.forceStop()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error stopping SDR engine", e)
+                    }
+                }.start()
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop service", e)

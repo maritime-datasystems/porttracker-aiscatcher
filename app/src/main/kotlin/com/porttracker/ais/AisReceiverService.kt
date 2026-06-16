@@ -60,7 +60,7 @@ class AisReceiverService : Service() {
             private set
         
         @Volatile var hasDevice = false
-            private set
+            internal set
         
         // Message counter for UI display
         private val _messageCount = java.util.concurrent.atomic.AtomicInteger(0)
