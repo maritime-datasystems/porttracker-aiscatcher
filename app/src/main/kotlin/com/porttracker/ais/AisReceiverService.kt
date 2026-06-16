@@ -259,6 +259,22 @@ class AisReceiverService : Service() {
         }
     }
 
+    /**
+     * Re-scan USB devices and open the SDR file descriptor.
+     * Used when restarting the engine after the SDR was plugged in post-launch.
+     */
+    private fun rescanAndOpenUsb(): Int {
+        val deviceInfo = UsbDeviceScanner.scanForDevices(this)
+        if (deviceInfo.found && deviceInfo.isUsable) {
+            Log.i(TAG, "rescanAndOpenUsb: Found SDR vendor=${deviceInfo.vendorId}, product=${deviceInfo.productId}")
+            val fd = openUsbDevice(deviceInfo.vendorId, deviceInfo.productId)
+            fileDescriptor = fd
+            return fd
+        }
+        Log.w(TAG, "rescanAndOpenUsb: No usable SDR device found")
+        return -1
+    }
+
     fun triggerEngineRestart() {
         Log.i(TAG, "Triggering engine restart via Admin API...")
         restartRequested.set(true)
@@ -319,8 +335,10 @@ class AisReceiverService : Service() {
                 Thread.sleep(2000)
                 val newConfig = ServiceConfig.fromPreferences(this)
                 restartRequested.set(false)
-                Log.i(TAG, "Re-running engine with updated config...")
-                runNativeEngine(newConfig, currentSource, fileDescriptor)
+                // Re-scan USB in case a device was plugged in after initial start
+                val newFd = rescanAndOpenUsb()
+                Log.i(TAG, "Re-running engine with updated config... (fd=$newFd)")
+                runNativeEngine(newConfig, currentSource, newFd)
                 // If engine exits again after restart, fall through to unexpected exit
             }
             
@@ -337,11 +355,13 @@ class AisReceiverService : Service() {
                     }
                 }
                 if (restartRequested.get()) {
-                    Log.i(TAG, "Restart requested during keep-alive, re-running engine...")
+                    Log.i(TAG, "Restart requested during keep-alive, re-scanning USB and re-running engine...")
                     Thread.sleep(1000)
                     val newConfig = ServiceConfig.fromPreferences(this)
                     restartRequested.set(false)
-                    runNativeEngine(newConfig, currentSource, fileDescriptor)
+                    val newFd = rescanAndOpenUsb()
+                    Log.i(TAG, "Re-running engine with fd=$newFd")
+                    runNativeEngine(newConfig, currentSource, newFd)
                 }
             }
             
