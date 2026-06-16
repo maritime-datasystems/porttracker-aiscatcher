@@ -118,9 +118,9 @@ class AdminWebServer(
                         ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
                     
                     if (configManager.updateConfig(jsonString)) {
-                        // Auto-restart logic
-                        service.triggerEngineRestart()
-                        return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_triggered\":true}")
+                        // Settings saved — do NOT auto-restart, native engine crashes on forceStop
+                        // Settings will apply on next app/service restart
+                        return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_required\":true}")
                     } else {
                          return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", "{\"status\":\"error\",\"message\":\"Failed to update preferences\"}")
                     }
@@ -173,8 +173,9 @@ class AdminWebServer(
         }
 
         if (session.method == Method.POST && session.uri == "/admin/restart") {
-             service.triggerEngineRestart()
-             return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"restarting_soon\"}")
+             // Don't restart — native engine crashes on forceStop (SIGSEGV)
+             // Just return success, settings are already saved
+             return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"restart_required\",\"message\":\"Please restart the app to apply changes\"}")
         }
 
         // --- TrustedDocks / MQTT Gateway Endpoints ---

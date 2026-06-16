@@ -736,7 +736,7 @@ var SettingsRenderer = {
         collect('vessel_mmsi');
 
         // Send to API
-        this.showLoading("Saving configuration and restarting service...");
+        this.showLoading("Saving configuration...");
 
         try {
             const response = await fetch('/admin/api/config', {
@@ -746,9 +746,9 @@ var SettingsRenderer = {
             });
 
             if (response.ok) {
-                setTimeout(() => {
-                    window.location.reload();
-                }, 5000); // Wait 5s for restart then reload
+                alert("✅ Settings saved. Restart the app to apply changes.");
+                this.hideLoading();
+                this.init(); // Reload settings from server
             } else {
                 throw new Error("Save failed");
             }
@@ -759,18 +759,12 @@ var SettingsRenderer = {
     },
 
     restartService: async function () {
-        if (!confirm("Are you sure you want to restart the AIS Service?")) return;
+        if (!confirm("To apply settings changes, please close and reopen the app. Continue?")) return;
 
-        this.showLoading("Restarting Service...");
         try {
             await fetch('/admin/restart', { method: 'POST' });
-            setTimeout(() => {
-                window.location.reload();
-            }, 5000);
-        } catch (e) {
-            alert("Error restarting: " + e.message);
-            this.hideLoading();
-        }
+        } catch (e) { /* ignore */ }
+        alert("Please close and reopen the app to apply changes.");
     },
 
     refreshGatewayStatus: async function () {
