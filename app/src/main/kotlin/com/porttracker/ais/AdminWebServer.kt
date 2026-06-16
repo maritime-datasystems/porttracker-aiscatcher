@@ -562,7 +562,13 @@ class AdminWebServer(
         // Always allow local access (in-app WebView uses 127.0.0.1)
         val remoteIp = session.remoteIpAddress ?: ""
         Log.d(TAG, "Auth check: remoteIp=$remoteIp authEnabled=$authEnabled")
-        if (remoteIp == "127.0.0.1" || remoteIp == "::1" || remoteIp == "0:0:0:0:0:0:0:1" || remoteIp.startsWith("127.")) {
+        if (remoteIp == "127.0.0.1" || 
+            remoteIp == "::1" || 
+            remoteIp == "0:0:0:0:0:0:0:1" || 
+            remoteIp.startsWith("127.") || 
+            remoteIp.endsWith("127.0.0.1") || 
+            remoteIp.startsWith("::ffff:127.") ||
+            remoteIp.equals("localhost", ignoreCase = true)) {
             return null // Local access, skip auth
         }
         

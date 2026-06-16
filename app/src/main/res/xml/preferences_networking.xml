@@ -77,7 +77,7 @@
             android:key="web_auth_enabled"
             android:title="Require Password"
             android:summary="Protect web interface with username/password"
-            android:defaultValue="true"
+            android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference

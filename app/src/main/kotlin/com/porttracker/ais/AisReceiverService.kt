@@ -202,7 +202,7 @@ class AisReceiverService : Service() {
         }
         
         // Start MQTT publishing if enabled and configured
-        if (config.mqttEnabled && config.mqttTopicJson.isNotEmpty()) {
+        if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
             startMqttPublisher()
         }
         
@@ -571,42 +571,7 @@ class AisReceiverService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun loadConfig(): ServiceConfig {
-        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
-        
-        // Load UDP outputs
-        val udpOutputs = (1..4).map { i ->
-            UdpOutput(
-                enabled = prefs.getBoolean("udp${i}_enabled", false),
-                host = prefs.getString("udp${i}_host", "127.0.0.1") ?: "127.0.0.1",
-                port = prefs.getString("udp${i}_port", (10109 + i).toString())?.toIntOrNull() ?: (10109 + i),
-                json = prefs.getBoolean("udp${i}_json", false)
-            )
-        }
-        
-        return ServiceConfig(
-            deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
-            udpOutputs = udpOutputs,
-            tcpEnabled = prefs.getBoolean("tcp_enabled", false),
-            tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
-            webViewerEnabled = prefs.getBoolean("webviewer_enabled", false),
-            webViewerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
-            gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
-            gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
-            gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
-            gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
-            hubEnabled = prefs.getBoolean("hub_sharing", false),
-            hubKey = prefs.getString("hub_key", "") ?: "",
-            remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
-            stationName = prefs.getString("pref_station_name", "") ?: "",
-            mqttEnabled = prefs.getBoolean("mqtt_enabled", false),
-            mqttBrokerUrl = prefs.getString("mqtt_broker_url", "ssl://mqtt.navisense.de:8883") ?: "ssl://mqtt.navisense.de:8883",
-            mqttUsername = prefs.getString("mqtt_username", "") ?: "",
-            mqttPassword = prefs.getString("mqtt_password", "") ?: "",
-            mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
-            mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
-            mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
-            mqttStationName = prefs.getString("mqtt_station_name", "") ?: ""
-        )
+        return ServiceConfig.fromPreferences(this)
     }
 
     private fun createNotificationChannel() {
@@ -755,7 +720,48 @@ data class ServiceConfig(
     val mqttTopicJson: String = "",
     val mqttFormat: String = "aisc-json",
     val mqttStationName: String = ""
-)
+) {
+    companion object {
+        fun fromPreferences(context: Context): ServiceConfig {
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+            
+            // Load UDP outputs
+            val udpOutputs = (1..4).map { i ->
+                UdpOutput(
+                    enabled = prefs.getBoolean("udp${i}_enabled", false),
+                    host = prefs.getString("udp${i}_host", "127.0.0.1") ?: "127.0.0.1",
+                    port = prefs.getString("udp${i}_port", (10109 + i).toString())?.toIntOrNull() ?: (10109 + i),
+                    json = prefs.getBoolean("udp${i}_json", false)
+                )
+            }
+            
+            return ServiceConfig(
+                deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
+                udpOutputs = udpOutputs,
+                tcpEnabled = prefs.getBoolean("tcp_enabled", false),
+                tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
+                webViewerEnabled = prefs.getBoolean("webviewer_enabled", false),
+                webViewerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
+                gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
+                gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
+                gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
+                gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
+                hubEnabled = prefs.getBoolean("hub_sharing", false),
+                hubKey = prefs.getString("hub_key", "") ?: "",
+                remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
+                stationName = prefs.getString("pref_station_name", "") ?: "",
+                mqttEnabled = prefs.getBoolean("mqtt_enabled", false),
+                mqttBrokerUrl = prefs.getString("mqtt_broker_url", "ssl://mqtt.navisense.de:8883") ?: "ssl://mqtt.navisense.de:8883",
+                mqttUsername = prefs.getString("mqtt_username", "") ?: "",
+                mqttPassword = prefs.getString("mqtt_password", "") ?: "",
+                mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
+                mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
+                mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
+                mqttStationName = prefs.getString("mqtt_station_name", "") ?: ""
+            )
+        }
+    }
+}
 
 /**
  * SDR device types
