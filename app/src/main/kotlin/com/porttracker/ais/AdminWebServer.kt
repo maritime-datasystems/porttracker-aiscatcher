@@ -600,7 +600,7 @@ class AdminWebServer(
             </html>
             """.trimIndent()
         )
-        response.addHeader("WWW-Authenticate", "Basic realm=\"PortTracker AIS\"")
+        response.addHeader("WWW-Authenticate", "Basic realm=\"TrustedDocks AIS\"")
         return response
     }
 }

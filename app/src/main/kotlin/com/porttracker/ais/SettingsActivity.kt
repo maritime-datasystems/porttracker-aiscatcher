@@ -463,7 +463,7 @@ class SettingsActivity : AppCompatActivity() {
                     } catch (e2: Exception) {
                         Toast.makeText(
                             requireContext(),
-                            "Could not open battery settings. Please disable optimization manually in Settings > Apps > PortTracker.",
+                            "Could not open battery settings. Please disable optimization manually in Settings > Apps > TrustedDocks AIS.",
                             Toast.LENGTH_LONG
                         ).show()
                     }

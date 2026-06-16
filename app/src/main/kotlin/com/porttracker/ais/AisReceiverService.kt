@@ -586,7 +586,7 @@ class AisReceiverService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "porttracker-aiscatcher",
+                "TrustedDocks AIS",
                 NotificationManager.IMPORTANCE_MIN  // Minimum importance - no sound, no popup
             ).apply {
                 description = "AIS Receiver service status"
@@ -607,7 +607,7 @@ class AisReceiverService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("porttracker-aiscatcher")
+            .setContentTitle("TrustedDocks AIS")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
