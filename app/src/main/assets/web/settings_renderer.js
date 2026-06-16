@@ -48,6 +48,9 @@ var SettingsRenderer = {
                     <button class="nav-link" id="tab-location" data-bs-toggle="tab" data-bs-target="#pane-location" type="button">Location</button>
                 </li>
                 <li class="nav-item">
+                    <button class="nav-link" id="tab-app" data-bs-toggle="tab" data-bs-target="#pane-app" type="button"><i class="bi bi-gear-wide-connected"></i> App</button>
+                </li>
+                <li class="nav-item">
                     <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">TrustedDocks</button>
                 </li>
                 <li class="nav-item">
@@ -63,6 +66,7 @@ var SettingsRenderer = {
                 <div class="tab-pane fade" id="pane-networking">${this.renderNetworkingPane()}</div>
                 <div class="tab-pane fade" id="pane-settings">${this.renderSettingsPane()}</div>
                 <div class="tab-pane fade" id="pane-location">${this.renderLocationPane()}</div>
+                <div class="tab-pane fade" id="pane-app">${this.renderAppPane()}</div>
                 <div class="tab-pane fade" id="pane-porttracker">${this.renderPorttrackerPane()}</div>
                 <div class="tab-pane fade" id="pane-database">${this.renderDatabasePane()}</div>
                 <div class="tab-pane fade" id="pane-control">${this.renderControlPane()}</div>
@@ -216,6 +220,21 @@ var SettingsRenderer = {
                 <input type="number" class="form-control" id="frequency_correction" value="${this.val('frequency_correction', '0')}">
                 <div class="form-text">Frequency correction in Parts Per Million (ppm)</div>
             </div>
+            
+            <hr>
+            <h5 class="mt-4"><i class="bi bi-ethernet"></i> TCP Listener</h5>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="tcp_enabled" ${this.bool('tcp_enabled') ? 'checked' : ''}>
+                        <label class="form-check-label" for="tcp_enabled">Enable TCP Listener</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TCP Port</label>
+                        <input type="number" class="form-control" id="tcp_port" value="${this.val('tcp_port', '10111')}">
+                    </div>
+                </div>
+            </div>
         `;
     },
 
@@ -267,6 +286,12 @@ var SettingsRenderer = {
                             <label class="form-label">Port</label>
                             <input type="number" class="form-control" id="udp${i}_port" value="${this.val(`udp${i}_port`, 10109 + i)}">
                         </div>
+                        <div class="col-12 mt-2">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="udp${i}_json" ${this.bool(`udp${i}_json`) ? 'checked' : ''}>
+                                <label class="form-check-label" for="udp${i}_json">JSON format</label>
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -288,6 +313,17 @@ var SettingsRenderer = {
                     <label class="form-label">GPSD Port</label>
                     <input type="number" class="form-control" id="gpsd_port" value="${this.val('gpsd_port', '2947')}">
                 </div>
+            </div>
+            <div class="mb-3 mt-3">
+                <label class="form-label">Update Interval</label>
+                <select class="form-select" id="gpsd_interval">
+                    <option value="1" ${this.val('gpsd_interval', '10') === '1' ? 'selected' : ''}>1s</option>
+                    <option value="2" ${this.val('gpsd_interval', '10') === '2' ? 'selected' : ''}>2s</option>
+                    <option value="5" ${this.val('gpsd_interval', '10') === '5' ? 'selected' : ''}>5s</option>
+                    <option value="10" ${this.val('gpsd_interval', '10') === '10' ? 'selected' : ''}>10s</option>
+                    <option value="30" ${this.val('gpsd_interval', '10') === '30' ? 'selected' : ''}>30s</option>
+                    <option value="60" ${this.val('gpsd_interval', '10') === '60' ? 'selected' : ''}>60s</option>
+                </select>
             </div>
         `;
 
@@ -377,6 +413,92 @@ var SettingsRenderer = {
                                 value="${this.val('vessel_mmsi', '')}" placeholder="e.g. 211234567" maxlength="9">
                             <div class="form-text">Maritime Mobile Service Identity (9 digits)</div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    renderAppPane: function () {
+        return `
+            <h5><i class="bi bi-gear-wide-connected"></i> App Settings</h5>
+            
+            <!-- Auto-Start -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-power"></i> Auto-Start</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_boot" ${this.bool('auto_start_boot') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_boot">Start on device boot</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_usb" ${this.bool('auto_start_usb') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_usb">Start when USB device connected</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_launch" ${this.bool('auto_start_launch') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_launch">Start when app opens</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="web_fallback_mode" ${this.bool('web_fallback_mode') ? 'checked' : ''}>
+                        <label class="form-check-label" for="web_fallback_mode">Web-only mode if no USB device</label>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Web Authentication -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-shield-lock"></i> Web Authentication</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="web_auth_enabled" ${this.bool('web_auth_enabled') ? 'checked' : ''}>
+                        <label class="form-check-label" for="web_auth_enabled">Require password for web access</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-control" id="web_auth_username" value="${this.val('web_auth_username', 'admin')}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="web_auth_password" value="${this.val('web_auth_password', 'admin')}">
+                            <button class="btn btn-outline-secondary" type="button" 
+                                onclick="const i=document.getElementById('web_auth_password'); i.type = i.type==='password' ? 'text' : 'password'">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="alert alert-warning mb-0">
+                        ⚠️ Changing authentication settings will take effect after service restart.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- DNS -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-globe"></i> DNS</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="dns_manual" ${this.bool('dns_manual') ? 'checked' : ''}>
+                        <label class="form-check-label" for="dns_manual">Use custom DNS servers</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Primary DNS</label>
+                        <input type="text" class="form-control" id="dns_primary" value="${this.val('dns_primary', '8.8.8.8')}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Secondary DNS</label>
+                        <input type="text" class="form-control" id="dns_secondary" value="${this.val('dns_secondary', '8.8.4.4')}">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Battery -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-battery-charging"></i> Battery</div>
+                <div class="card-body">
+                    <div class="alert alert-info mb-0">
+                        To prevent Android from stopping the AIS service, disable battery optimization for this app in Android Settings → Apps → PortTracker AIS → Battery → Unrestricted.
                     </div>
                 </div>
             </div>
@@ -564,14 +686,18 @@ var SettingsRenderer = {
         // Collect Settings
         collect('device_type', 'string'); // Saved as string "1" usually
         collect('frequency_correction', 'int');
+        collect('tcp_enabled', 'bool');
+        collect('tcp_port', 'int');
         collect('gpsd_enabled', 'bool');
         collect('gpsd_host');
         collect('gpsd_port', 'int');
+        collect('gpsd_interval');
 
         for (let i = 1; i <= 4; i++) {
             collect(`udp${i}_enabled`, 'bool');
             collect(`udp${i}_host`);
             collect(`udp${i}_port`, 'int');
+            collect(`udp${i}_json`, 'bool');
         }
 
         // Collect TrustedDocks / MQTT settings
@@ -587,6 +713,18 @@ var SettingsRenderer = {
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');
+
+        // Collect App settings
+        collect('auto_start_boot', 'bool');
+        collect('auto_start_usb', 'bool');
+        collect('auto_start_launch', 'bool');
+        collect('web_fallback_mode', 'bool');
+        collect('web_auth_enabled', 'bool');
+        collect('web_auth_username');
+        collect('web_auth_password');
+        collect('dns_manual', 'bool');
+        collect('dns_primary');
+        collect('dns_secondary');
 
         // Collect Location settings
         const installationType = document.getElementById('installation_fixed')?.checked ? 'fixed' : 'moving';
