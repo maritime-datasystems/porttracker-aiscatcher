@@ -17,6 +17,14 @@ var SettingsRenderer = {
             const response = await fetch('/admin/api/config');
             if (!response.ok) throw new Error("Failed to fetch config");
             this.currentConfig = await response.json();
+            // Also fetch live status to get SDR/service state
+            try {
+                const statusResp = await fetch('/admin/api/status');
+                if (statusResp.ok) {
+                    const status = await statusResp.json();
+                    this.currentConfig = { ...this.currentConfig, ...status };
+                }
+            } catch (e2) { /* status fetch is best-effort */ }
             this.render();
         } catch (e) {
             const errorDiv = document.createElement('div');
@@ -863,12 +871,12 @@ var SettingsRenderer = {
             // Update device info
             const deviceName = document.getElementById('sdr_device_name');
             if (deviceName) {
-                deviceName.textContent = status.usb_device_name || 'No device';
+                deviceName.innerHTML = '<strong>' + (status.sdr_device_name || 'No device') + '</strong>';
             }
 
             const sdrConnected = document.getElementById('sdr_connected');
             if (sdrConnected) {
-                const connected = status.usb_device_found === true;
+                const connected = status.sdr_connected === true;
                 sdrConnected.innerHTML = connected
                     ? '<span class="text-success">✅ Connected</span>'
                     : '<span class="text-danger">❌ Not Connected</span>';
@@ -876,10 +884,26 @@ var SettingsRenderer = {
 
             const usbPermission = document.getElementById('sdr_usb_permission');
             if (usbPermission) {
-                const granted = status.usb_permission_granted === true;
+                const granted = status.sdr_permission === true;
                 usbPermission.innerHTML = granted
                     ? '<span class="text-success">✅ Granted</span>'
                     : '<span class="text-warning">⚠️ Not Granted</span>';
+            }
+
+            // Update USB device list
+            const usbDeviceList = document.getElementById('usb_device_list');
+            if (usbDeviceList && Array.isArray(status.usb_devices)) {
+                if (status.usb_devices.length > 0) {
+                    usbDeviceList.innerHTML = status.usb_devices.map(dev => `
+                        <tr>
+                            <td>${dev.name || 'Unknown'}</td>
+                            <td><code>${dev.vendorId || '?'}:${dev.productId || '?'}</code></td>
+                            <td>${dev.isSDR ? '<span class="badge bg-primary">SDR</span>' : ''}${dev.hasPermission ? ' <span class="badge bg-success">Permitted</span>' : ''}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    usbDeviceList.innerHTML = '<tr><td colspan="3" class="text-muted">No USB devices detected</td></tr>';
+                }
             }
 
             // Update config for full re-render if needed
