@@ -332,6 +332,15 @@
             document.querySelector('.overlay').classList.toggle('active');
         }
 
+        function requestUsbPermission() {
+            // Call native Android bridge (only available when running inside the app WebView)
+            if (typeof Android !== 'undefined' && Android.requestUsbPermission) {
+                Android.requestUsbPermission();
+            } else {
+                alert('USB permissions can only be managed from within the app.');
+            }
+        }
+
         async function fetchStatus() {
             try {
                 const res = await fetch('/admin/api/status_ui');
@@ -346,7 +355,13 @@
                 getStatusEl('st_version').innerText = data.app_version;
                 getStatusEl('st_ip').innerText = data.local_ip;
                 getStatusEl('st_net').innerText = data.network_status;
-                getStatusEl('st_device').innerText = data.device_status;
+                getStatusEl('st_device').innerHTML = data.device_status;
+
+                // If device needs permission, show a button (only works in embedded WebView)
+                if (data.device_status && data.device_status.includes('permission')) {
+                    getStatusEl('st_device').innerHTML = data.device_status +
+                        ' <button onclick="requestUsbPermission()" style="margin-left:8px; padding:4px 12px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Grant Permission</button>';
+                }
                 getStatusEl('st_msg').innerText = data.msg_count;
 
                 getStatusEl('st_gps_status').innerText = data.gps_status;

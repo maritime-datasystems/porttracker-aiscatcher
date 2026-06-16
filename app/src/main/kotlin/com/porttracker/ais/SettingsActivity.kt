@@ -1,8 +1,10 @@
 package com.porttracker.ais
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
@@ -30,6 +32,37 @@ class SettingsActivity : AppCompatActivity() {
     private var webView: WebView? = null
 
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
+
+    // Receiver for USB permission result — auto-starts service when granted
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == USB_PERMISSION_ACTION) {
+                val device = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                if (granted && device != null) {
+                    Log.i(TAG, "USB permission granted for ${device.productName}")
+                    Toast.makeText(context, "✅ USB permission granted", Toast.LENGTH_SHORT).show()
+                    // Auto-start service with the device
+                    if (!AisReceiverService.isRunning) {
+                        val serviceIntent = Intent(context, AisReceiverService::class.java).apply {
+                            putExtra("USB_VENDOR_ID", device.vendorId)
+                            putExtra("USB_PRODUCT_ID", device.productId)
+                        }
+                        startForegroundService(serviceIntent)
+                    }
+                    // Reload web UI to reflect new status
+                    webView?.postDelayed({ loadWebUI() }, 1500)
+                } else {
+                    Toast.makeText(context, "❌ USB permission denied", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,10 +133,19 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
             webChromeClient = WebChromeClient()
+            addJavascriptInterface(WebBridge(), "Android")
         }
         rootLayout.addView(webView)
 
         setContentView(rootLayout)
+
+        // Register USB permission receiver
+        val filter = IntentFilter(USB_PERMISSION_ACTION)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbPermissionReceiver, filter)
+        }
 
         // Check USB permission at startup
         Handler(Looper.getMainLooper()).postDelayed({
@@ -166,6 +208,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(usbPermissionReceiver) } catch (_: Exception) {}
         webView?.destroy()
         webView = null
         super.onDestroy()
@@ -185,6 +228,16 @@ class SettingsActivity : AppCompatActivity() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         val port = prefs.getString("pref_local_web_port", "8080") ?: "8080"
         webView?.loadUrl("http://127.0.0.1:$port/")
+    }
+
+    /** JavaScript bridge exposed to the WebView as `Android.requestUsbPermission()` */
+    inner class WebBridge {
+        @android.webkit.JavascriptInterface
+        fun requestUsbPermission() {
+            runOnUiThread {
+                checkAndRequestUsbPermission()
+            }
+        }
     }
 
     private fun ensureServiceStarted() {
