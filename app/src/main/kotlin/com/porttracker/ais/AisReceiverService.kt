@@ -262,11 +262,16 @@ class AisReceiverService : Service() {
     fun triggerEngineRestart() {
         Log.i(TAG, "Triggering engine restart via Admin API...")
         restartRequested.set(true)
-        try {
-            AisCatcherJava.forceStop()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error forcing stop for restart", e)
-        }
+        // Run on background thread to avoid blocking the HTTP response
+        // and give native engine time to wind down before Close() is called
+        Thread {
+            try {
+                Thread.sleep(500) // Let HTTP response flush first
+                AisCatcherJava.forceStop()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error forcing stop for restart", e)
+            }
+        }.start()
     }
 
     private fun runServiceLoop(config: ServiceConfig) {
