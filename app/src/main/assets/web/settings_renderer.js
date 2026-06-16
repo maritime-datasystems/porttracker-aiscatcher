@@ -100,6 +100,9 @@ var SettingsRenderer = {
         // This is a static view of the current config values deemed "Status" related
         const remoteEnabled = this.bool('pref_enable_remote');
         const mqttEnabled = this.bool('mqtt_enabled');
+        const stationName = this.val('pref_station_name', '').trim();
+        const sanitizedName = stationName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const externalUrl = (remoteEnabled && sanitizedName) ? `http://${sanitizedName}.connect.porttracker.co` : '';
         return `
             <h5>Application Info</h5>
             <table class="table table-bordered">
@@ -107,6 +110,7 @@ var SettingsRenderer = {
                 <tr><th>Device Type</th><td>${this.getDeviceTypeName(this.val('device_type', '1'))}</td></tr>
                 <tr><th>Web Server Port</th><td>${this.val('pref_local_web_port', '8080')}</td></tr>
                 <tr><th>Remote Access</th><td>${remoteEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
+                ${externalUrl ? `<tr><th>External URL</th><td><a href="${externalUrl}" target="_blank" class="text-primary"><i class="bi bi-box-arrow-up-right"></i> ${externalUrl}</a></td></tr>` : ''}
                 <tr><th>MQTT Publishing</th><td>${mqttEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
             </table>
         `;
@@ -239,17 +243,33 @@ var SettingsRenderer = {
     },
 
     renderNetworkingPane: function () {
+        const remoteEnabled = this.bool('pref_enable_remote');
+        const stationName = this.val('pref_station_name', '').trim();
+        const sanitizedName = stationName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const externalUrl = (remoteEnabled && sanitizedName) ? `http://${sanitizedName}.connect.porttracker.co` : '';
         return `
             <h5>Remote Access</h5>
             <div class="mb-3 form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="pref_enable_remote" ${this.bool('pref_enable_remote') ? 'checked' : ''}>
+                <input class="form-check-input" type="checkbox" id="pref_enable_remote" ${remoteEnabled ? 'checked' : ''}>
                 <label class="form-check-label" for="pref_enable_remote">Enable External Web Portal</label>
             </div>
             <div class="mb-3">
                 <label class="form-label">Station Name</label>
                 <input type="text" class="form-control" id="pref_station_name" value="${this.val('pref_station_name')}">
-                <div class="form-text">Unique name for your station (e.g. my-boat-1)</div>
+                <div class="form-text">Unique name for your station (e.g. my-boat-1). This is used as the subdomain for remote access.</div>
             </div>
+            ${externalUrl ? `
+            <div class="alert alert-success d-flex align-items-center" role="alert">
+                <i class="bi bi-globe2 me-2" style="font-size: 1.2rem;"></i>
+                <div>
+                    <strong>External Portal Active</strong><br>
+                    <a href="${externalUrl}" target="_blank" class="alert-link">${externalUrl}</a>
+                </div>
+            </div>` : (remoteEnabled && !sanitizedName ? `
+            <div class="alert alert-warning d-flex align-items-center" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <div>Set a <strong>Station Name</strong> above to enable remote access.</div>
+            </div>` : '')}
             <hr>
             <h5>Local Network</h5>
              <div class="mb-3">
