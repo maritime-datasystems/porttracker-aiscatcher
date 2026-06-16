@@ -111,7 +111,11 @@ class AdminWebServer(
                 try {
                     val map = HashMap<String, String>()
                     session.parseBody(map)
-                    val jsonString = map["postData"] ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
+                    // NanoHTTPD puts x-www-form-urlencoded data in session.parms,
+                    // and raw JSON body in map["postData"]
+                    val jsonString = map["postData"]
+                        ?: session.parms?.get("postData")
+                        ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
                     
                     if (configManager.updateConfig(jsonString)) {
                         // Auto-restart logic

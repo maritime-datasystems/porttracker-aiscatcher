@@ -873,7 +873,7 @@ var SettingsRenderer = {
 
         readerDiv.style.display = 'block';
         statusDiv.style.display = 'block';
-        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-camera-video"></i> Point camera at QR code...</span>';
+        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-camera-video"></i> Starting camera...</span>';
 
         try {
             this._qrScanner = new Html5Qrcode("qr-reader");
@@ -887,10 +887,50 @@ var SettingsRenderer = {
                     // Scan in progress, ignore per-frame errors
                 }
             ).catch((err) => {
-                statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> Camera error: ' + err + '</span>';
+                // Camera failed (likely HTTP context) — show file upload fallback
+                this._qrScanner = null;
+                this._showQrFileFallback(readerDiv, statusDiv);
             });
         } catch (e) {
-            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-exclamation-triangle"></i> Scanner error: ' + e.message + '</span>';
+            this._qrScanner = null;
+            this._showQrFileFallback(readerDiv, statusDiv);
+        }
+    },
+
+    _showQrFileFallback: function(readerDiv, statusDiv) {
+        statusDiv.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> Camera not available (requires HTTPS). Use the button below to take a photo of the QR code instead.</span>';
+        readerDiv.innerHTML = `
+            <div class="text-center p-3">
+                <label class="btn btn-outline-primary btn-lg" style="cursor:pointer">
+                    <i class="bi bi-camera"></i> Take Photo / Choose Image
+                    <input type="file" accept="image/*" capture="environment" 
+                           style="display:none" 
+                           onchange="SettingsRenderer._handleQrFile(event)">
+                </label>
+                <p class="text-muted mt-2 mb-0" style="font-size:0.85em">Take a photo of the station QR code or select an image from your gallery.</p>
+            </div>
+        `;
+    },
+
+    _handleQrFile: async function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const statusDiv = document.getElementById('qr-status');
+        statusDiv.innerHTML = '<span class="text-info"><i class="bi bi-hourglass-split"></i> Scanning image...</span>';
+        try {
+            const scanner = new Html5Qrcode("qr-reader-file-tmp");
+            // Create a temporary hidden div for the scanner
+            let tmpDiv = document.getElementById('qr-reader-file-tmp');
+            if (!tmpDiv) {
+                tmpDiv = document.createElement('div');
+                tmpDiv.id = 'qr-reader-file-tmp';
+                tmpDiv.style.display = 'none';
+                document.body.appendChild(tmpDiv);
+            }
+            const result = await scanner.scanFile(file, true);
+            SettingsRenderer.handleQrResult(result);
+        } catch (e) {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not find QR code in image. Try again with a clearer photo.</span>';
         }
     },
 
