@@ -482,95 +482,57 @@
         }
 
         // --- NMEA Logic ---
-        let nmeaReader = null;
-        let nmeaAbortController = null;
+        let nmeaEventSource = null;
 
         function startNmeaStream() {
-            if (nmeaReader) return;
+            if (nmeaEventSource) return;
 
             const statusEl = document.getElementById('nmea_status');
             statusEl.innerText = "Connecting...";
             statusEl.style.color = "orange";
 
-            nmeaAbortController = new AbortController();
+            nmeaEventSource = new EventSource('/api/sse');
 
-            fetch('/api/sse', { signal: nmeaAbortController.signal })
-                .then(response => {
-                    nmeaReader = response.body.getReader();
-                    const decoder = new TextDecoder("utf-8");
-                    statusEl.innerText = "Streaming (Connected)";
-                    statusEl.style.color = "green";
-                    console.log("Stream: Connected");
+            nmeaEventSource.onopen = function() {
+                statusEl.innerText = "Streaming (Connected)";
+                statusEl.style.color = "green";
+                console.log("NMEA Stream: Connected");
+            };
 
-                    function readStream() {
-                        nmeaReader.read().then(({ done, value }) => {
-                            if (done) {
-                                console.log("Stream: Complete");
-                                statusEl.innerText = "Disconnected";
-                                statusEl.style.color = "red";
-                                nmeaReader = null;
-                                nmeaAbortController = null;
-                                return;
-                            }
+            nmeaEventSource.onmessage = function(event) {
+                const data = event.data.trim();
+                if (!data) return;
 
-                            const chunk = decoder.decode(value, { stream: true });
-                            // console.log("Stream: Received Chunk", chunk.length);
+                const textarea = document.getElementById('nmea_output');
+                textarea.value += data + "\n";
 
-                            // Simple SSE Parser
-                            const lines = chunk.split('\n');
-                            lines.forEach(line => {
-                                // console.log("Stream Line:", line);
-                                if (line.startsWith("data:")) {
-                                    const data = line.substring(5).trim();
-                                    // console.log("Stream Data:", data);
-                                    if (data) {
-                                        const textarea = document.getElementById('nmea_output');
-                                        textarea.value += data + "\n";
+                if (textarea.value.length > 50000) {
+                    textarea.value = textarea.value.substring(textarea.value.length - 20000);
+                }
 
-                                        if (textarea.value.length > 50000) {
-                                            textarea.value = textarea.value.substring(textarea.value.length - 20000);
-                                        }
+                if (document.getElementById('auto_scroll').checked) {
+                    textarea.scrollTop = textarea.scrollHeight;
+                }
+            };
 
-                                        if (document.getElementById('auto_scroll').checked) {
-                                            textarea.scrollTop = textarea.scrollHeight;
-                                        }
-                                    }
-                                }
-                            });
-
-                            readStream();
-                        }).catch(error => {
-                            if (error.name === 'AbortError') return; // Intentional stop
-                            console.error("Stream: Error reading", error);
-                            const s = document.getElementById('nmea_status');
-                            if (s) { s.innerText = "Error - Retrying..."; s.style.color = "orange"; }
-                            nmeaReader = null;
-                            nmeaAbortController = null;
-                            setTimeout(startNmeaStream, 2000); // Retry
-                        });
-                    }
-                    readStream();
-                })
-                .catch(error => {
-                    if (error.name !== 'AbortError') {
-                        console.error("Stream: Connection failed", error);
-                        statusEl.innerText = "Connection Failed";
-                        statusEl.style.color = "red";
-                    }
-                    nmeaReader = null;
-                    nmeaAbortController = null;
-                });
+            nmeaEventSource.onerror = function() {
+                statusEl.innerText = "Disconnected";
+                statusEl.style.color = "red";
+                console.log("NMEA Stream: Error/Disconnected");
+                // EventSource auto-reconnects, but update UI
+            };
         }
 
         function stopNmeaStream() {
-            if (nmeaAbortController) {
-                nmeaAbortController.abort();
-                nmeaAbortController = null;
+            if (nmeaEventSource) {
+                nmeaEventSource.close();
+                nmeaEventSource = null;
             }
-            nmeaReader = null;
             const statusEl = document.getElementById('nmea_status');
-            statusEl.innerText = "Stopped";
-            statusEl.style.color = "#666";
+            if (statusEl) {
+                statusEl.innerText = "Stopped";
+                statusEl.style.color = "#666";
+            }
         }
 
         // --- Navigation Logic ---
