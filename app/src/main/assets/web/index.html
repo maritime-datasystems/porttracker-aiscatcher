@@ -303,7 +303,7 @@
         </section>
 
         <section id="db">
-            <div class="card">
+            <div class="card" id="db_list_view">
                 <h2>Vessel Database</h2>
                 <div style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                     <input id="db_search" type="text" placeholder="Search name / MMSI / IMO / callsign"
@@ -330,6 +330,17 @@
                             </tr>
                         </thead>
                         <tbody id="db_rows"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card" id="db_detail_view" style="display: none;">
+                <button onclick="backToVesselList()"
+                    style="padding: 6px 14px; background: #607D8B; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 12px;">&larr; Back to list</button>
+                <h2 id="db_detail_title" style="margin: 0 0 12px 0;">Vessel</h2>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <tbody id="db_detail_rows"></tbody>
                     </table>
                 </div>
             </div>
@@ -626,8 +637,9 @@
                 stopNmeaStream();
             }
 
-            // DB: load vessel table on entry
+            // DB: show list (not a stale detail) and load on entry
             if (id === 'db') {
+                backToVesselList();
                 loadVesselDb();
             }
         }
@@ -651,7 +663,8 @@
                 const rows = data.vessels || [];
                 tbody.innerHTML = rows.map(v => {
                     const seen = v.last_seen ? new Date(v.last_seen).toLocaleTimeString() : '';
-                    return '<tr style="border-bottom:1px solid #eee;">' +
+                    return '<tr onclick="showVesselDetail(' + v.mmsi + ')" style="border-bottom:1px solid #eee; cursor:pointer;"' +
+                        ' onmouseover="this.style.background=\'#f5f5f5\'" onmouseout="this.style.background=\'\'">' +
                         '<td style="padding:6px;">' + v.mmsi + '</td>' +
                         '<td style="padding:6px;">' + escapeHtml(v.name || '') + '</td>' +
                         '<td style="padding:6px;">' + (v.imo || '') + '</td>' +
@@ -667,6 +680,66 @@
             } catch (e) {
                 statusEl.textContent = 'Error loading DB: ' + e;
                 tbody.innerHTML = '';
+            }
+        }
+
+        // --- Vessel detail view ---
+        function backToVesselList() {
+            document.getElementById('db_detail_view').style.display = 'none';
+            document.getElementById('db_list_view').style.display = '';
+        }
+
+        function fmtTime(ms) {
+            return ms ? new Date(ms).toLocaleString() : '—';
+        }
+
+        async function showVesselDetail(mmsi) {
+            const listView = document.getElementById('db_list_view');
+            const detailView = document.getElementById('db_detail_view');
+            const title = document.getElementById('db_detail_title');
+            const tbody = document.getElementById('db_detail_rows');
+            listView.style.display = 'none';
+            detailView.style.display = '';
+            title.textContent = 'Vessel ' + mmsi;
+            tbody.innerHTML = '<tr><td style="padding:6px;">Loading…</td></tr>';
+            try {
+                const res = await fetch('/admin/api/vessel?mmsi=' + encodeURIComponent(mmsi));
+                if (!res.ok) { tbody.innerHTML = '<tr><td style="padding:6px;">Not found in DB.</td></tr>'; return; }
+                const v = await res.json();
+                title.textContent = (v.name ? v.name + ' ' : '') + '(' + v.mmsi + ')';
+
+                // Derived dimensions
+                const length = (v.to_bow != null && v.to_stern != null) ? (v.to_bow + v.to_stern) + ' m' : null;
+                const beam = (v.to_port != null && v.to_starboard != null) ? (v.to_port + v.to_starboard) + ' m' : null;
+
+                // Ordered, friendly field list. null/empty shown as —.
+                const fields = [
+                    ['MMSI', v.mmsi],
+                    ['Name', v.name],
+                    ['IMO', v.imo],
+                    ['Callsign', v.callsign],
+                    ['Ship type (code)', v.ship_type],
+                    ['Country', v.country],
+                    ['Destination', v.destination],
+                    ['Draught', v.draught != null ? v.draught + ' m' : null],
+                    ['ETA', v.eta],
+                    ['Length (bow+stern)', length],
+                    ['Beam (port+stbd)', beam],
+                    ['To bow', v.to_bow], ['To stern', v.to_stern],
+                    ['To port', v.to_port], ['To starboard', v.to_starboard],
+                    ['Messages seen', v.msg_count],
+                    ['First seen', fmtTime(v.first_seen)],
+                    ['Last static update', fmtTime(v.last_static_update)],
+                    ['Last seen', fmtTime(v.last_seen)],
+                ];
+                tbody.innerHTML = fields.map(f => {
+                    const val = (f[1] === null || f[1] === undefined || f[1] === '') ? '<span style="color:#aaa;">—</span>' : escapeHtml(String(f[1]));
+                    return '<tr style="border-bottom:1px solid #eee;">' +
+                        '<td style="padding:6px; color:#666; width:40%; vertical-align:top;">' + f[0] + '</td>' +
+                        '<td style="padding:6px; font-weight:500;">' + val + '</td></tr>';
+                }).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td style="padding:6px;">Error: ' + escapeHtml(String(e)) + '</td></tr>';
             }
         }
 

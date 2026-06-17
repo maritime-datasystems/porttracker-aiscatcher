@@ -184,21 +184,29 @@ class VesselDatabase private constructor(context: Context) :
 
         val out = JSONArray()
         readableDatabase.rawQuery(sql, args.toTypedArray()).use { c ->
-            val cols = c.columnNames
-            while (c.moveToNext()) {
-                val o = JSONObject()
-                for (i in cols.indices) {
-                    if (c.isNull(i)) { o.put(cols[i], JSONObject.NULL); continue }
-                    when (c.getType(i)) {
-                        android.database.Cursor.FIELD_TYPE_INTEGER -> o.put(cols[i], c.getLong(i))
-                        android.database.Cursor.FIELD_TYPE_FLOAT -> o.put(cols[i], c.getDouble(i))
-                        else -> o.put(cols[i], c.getString(i))
-                    }
-                }
-                out.put(o)
-            }
+            while (c.moveToNext()) out.put(rowToJson(c))
         }
         return out
+    }
+
+    /** Full stored record for a single vessel, or null if not in the cache. */
+    fun queryByMmsi(mmsi: Long): JSONObject? {
+        readableDatabase.rawQuery("SELECT * FROM $TABLE WHERE mmsi = ?", arrayOf(mmsi.toString())).use { c ->
+            return if (c.moveToFirst()) rowToJson(c) else null
+        }
+    }
+
+    private fun rowToJson(c: android.database.Cursor): JSONObject {
+        val o = JSONObject()
+        for (i in 0 until c.columnCount) {
+            if (c.isNull(i)) { o.put(c.getColumnName(i), JSONObject.NULL); continue }
+            when (c.getType(i)) {
+                android.database.Cursor.FIELD_TYPE_INTEGER -> o.put(c.getColumnName(i), c.getLong(i))
+                android.database.Cursor.FIELD_TYPE_FLOAT -> o.put(c.getColumnName(i), c.getDouble(i))
+                else -> o.put(c.getColumnName(i), c.getString(i))
+            }
+        }
+        return o
     }
 
     /** Export the whole table as CSV. */

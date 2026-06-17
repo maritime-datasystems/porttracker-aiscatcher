@@ -240,6 +240,13 @@ class AdminWebServer(
             val n = VesselDatabase.getInstance(service).count()
             return newFixedLengthResponse(Response.Status.OK, "application/json", """{"count":$n}""")
         }
+        if (session.method == Method.GET && session.uri == "/admin/api/vessel") {
+            val mmsi = parseQuery(session.queryParameterString)["mmsi"]?.toLongOrNull()
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", """{"error":"mmsi required"}""")
+            val v = VesselDatabase.getInstance(service).queryByMmsi(mmsi)
+                ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", """{"error":"not found"}""")
+            return newFixedLengthResponse(Response.Status.OK, "application/json", v.toString())
+        }
         if (session.method == Method.GET && session.uri == "/admin/api/vessels.csv") {
             return handleVesselCsv()
         }
