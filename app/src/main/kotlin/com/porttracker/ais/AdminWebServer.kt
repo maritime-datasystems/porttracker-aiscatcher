@@ -483,7 +483,9 @@ class AdminWebServer(
             override fun onNMEA(nmea: String) {
                 if (!isOpen.get()) return
                 try {
-                    val sseEvent = "data: $nmea\n\n"
+                    // SSE spec: each line of multiline data must be prefixed with "data:"
+                    val lines = nmea.trim().split("\n")
+                    val sseEvent = lines.joinToString("\n") { "data: ${it.trim()}" } + "\n\n"
                     synchronized(pipedOut) {
                         pipedOut.write(sseEvent.toByteArray())
                         pipedOut.flush()

@@ -540,9 +540,10 @@
 
                             readStream();
                         }).catch(error => {
+                            if (error.name === 'AbortError') return; // Intentional stop
                             console.error("Stream: Error reading", error);
-                            statusEl.innerText = "Error - Retrying...";
-                            statusEl.style.color = "orange";
+                            const s = document.getElementById('nmea_status');
+                            if (s) { s.innerText = "Error - Retrying..."; s.style.color = "orange"; }
                             nmeaReader = null;
                             nmeaAbortController = null;
                             setTimeout(startNmeaStream, 2000); // Retry
