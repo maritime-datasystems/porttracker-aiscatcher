@@ -258,6 +258,16 @@ class AdminWebServer(
             stats.put("positions_stored_session", VesselCacheWriter.positionsStored)
             return newFixedLengthResponse(Response.Status.OK, "application/json", stats.toString())
         }
+        if (session.method == Method.POST && session.uri == "/admin/api/positions/maintenance") {
+            // Manual trigger for the downsampling/retention pass. Optional
+            // raw_ms/hourly_ms overrides (used for testing without waiting months).
+            val p = parseQuery(session.queryParameterString)
+            val rawMs = p["raw_ms"]?.toLongOrNull() ?: (90L * 24 * 3_600_000)
+            val hourlyMs = p["hourly_ms"]?.toLongOrNull() ?: (365L * 24 * 3_600_000)
+            val stats = VesselDatabase.getInstance(service)
+                .runMaintenance(System.currentTimeMillis(), rawMs, hourlyMs)
+            return newFixedLengthResponse(Response.Status.OK, "application/json", stats.toString())
+        }
         if (session.method == Method.GET && session.uri == "/admin/api/vessel/track") {
             val p = parseQuery(session.queryParameterString)
             val mmsi = p["mmsi"]?.toLongOrNull()

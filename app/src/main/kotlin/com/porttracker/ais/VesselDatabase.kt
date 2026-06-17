@@ -332,6 +332,50 @@ class VesselDatabase private constructor(context: Context) :
         }
         return out
     }
+
+    /**
+     * Tiered downsampling + retention.
+     *  - raw (res 0) older than [rawRetentionMs]  → keep last point per (mmsi, hour) as hourly (res 1), delete the rest.
+     *  - hourly (res 1) older than [hourlyRetentionMs] → keep last per (mmsi, day) as daily (res 2), delete the rest.
+     *
+     * Decimation keeps a real reported position (the last in the bucket), no
+     * synthetic averaging. Works without SQLite window functions (minSdk 23).
+     * Returns post-run [positionStats].
+     */
+    fun runMaintenance(nowMs: Long, rawRetentionMs: Long, hourlyRetentionMs: Long): JSONObject {
+        val db = writableDatabase
+        val rawCutoff = nowMs - rawRetentionMs
+        val hourlyCutoff = nowMs - hourlyRetentionMs
+        val hourMs = 3_600_000L
+        val dayMs = 86_400_000L
+        db.beginTransaction()
+        try {
+            // raw → hourly: promote the last point per (mmsi, hour) past the cutoff.
+            db.execSQL(
+                "UPDATE $POS_TABLE SET resolution=1 WHERE resolution=0 AND ts < ? " +
+                    "AND ts = (SELECT MAX(ts) FROM $POS_TABLE v2 WHERE v2.mmsi=$POS_TABLE.mmsi " +
+                    "AND v2.resolution=0 AND v2.ts < ? AND v2.ts/$hourMs = $POS_TABLE.ts/$hourMs)",
+                arrayOf<Any>(rawCutoff, rawCutoff)
+            )
+            db.execSQL("DELETE FROM $POS_TABLE WHERE resolution=0 AND ts < ?", arrayOf<Any>(rawCutoff))
+
+            // hourly → daily: promote the last point per (mmsi, day) past the cutoff.
+            db.execSQL(
+                "UPDATE $POS_TABLE SET resolution=2 WHERE resolution=1 AND ts < ? " +
+                    "AND ts = (SELECT MAX(ts) FROM $POS_TABLE v2 WHERE v2.mmsi=$POS_TABLE.mmsi " +
+                    "AND v2.resolution=1 AND v2.ts < ? AND v2.ts/$dayMs = $POS_TABLE.ts/$dayMs)",
+                arrayOf<Any>(hourlyCutoff, hourlyCutoff)
+            )
+            db.execSQL("DELETE FROM $POS_TABLE WHERE resolution=1 AND ts < ?", arrayOf<Any>(hourlyCutoff))
+
+            db.setTransactionSuccessful()
+        } catch (e: Exception) {
+            Log.e(TAG, "runMaintenance failed", e)
+        } finally {
+            db.endTransaction()
+        }
+        return positionStats()
+    }
 }
 
 /** A single dynamic position report to persist. */

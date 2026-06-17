@@ -32,6 +32,11 @@ class VesselCacheWriter(
         private const val HEARTBEAT_MS = 300_000L   // 5 min
         private const val TURN_DEG = 15.0
 
+        // Retention: keep raw 3 months, then hourly until 1 year, then daily.
+        private const val RAW_RETENTION_MS = 90L * 24 * 3_600_000     // 90 days
+        private const val HOURLY_RETENTION_MS = 365L * 24 * 3_600_000 // 1 year
+        private const val MAINTENANCE_INTERVAL_MS = 24L * 3_600_000   // daily
+
         // Status surface for the UI / health endpoint.
         @Volatile var isRunning = false
             private set
@@ -132,6 +137,25 @@ class VesselCacheWriter(
         Log.d(TAG, "polled ${records.size} vessels" +
             (if (positions != null) "; +${positions.size} positions" else "") +
             "; static rows=${db.count()}")
+
+        maybeRunMaintenance(now)
+    }
+
+    /** Run downsampling/retention at most once a day, off the poll thread. */
+    private fun maybeRunMaintenance(now: Long) {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(appContext)
+        val last = try { prefs.getLong("last_position_maintenance_ms", 0L) } catch (e: Exception) { 0L }
+        if (now - last < MAINTENANCE_INTERVAL_MS) return
+        prefs.edit().putLong("last_position_maintenance_ms", now).apply()
+        Thread({
+            try {
+                Log.i(TAG, "Running position-history maintenance...")
+                val stats = db.runMaintenance(now, RAW_RETENTION_MS, HOURLY_RETENTION_MS)
+                Log.i(TAG, "Maintenance done: $stats")
+            } catch (e: Exception) {
+                Log.e(TAG, "Maintenance failed", e)
+            }
+        }, "PositionMaintenance").start()
     }
 
     /** Apply the movement/heartbeat rule and append a point if it should be stored. */
