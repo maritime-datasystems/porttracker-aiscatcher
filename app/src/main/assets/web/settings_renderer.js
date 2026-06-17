@@ -543,7 +543,6 @@ var SettingsRenderer = {
 
     renderPorttrackerPane: function () {
         const mqttEnabled = this.bool('mqtt_enabled');
-        const stationName = this.val('mqtt_station_name', '');
         const brokerUrl = this.val('mqtt_broker_url', 'ssl://mqtt.navisense.de:8883');
         const mqttUsername = this.val('mqtt_username', '');
         const mqttPassword = this.val('mqtt_password', '');
@@ -618,9 +617,10 @@ var SettingsRenderer = {
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Station Name (optional)</label>
-                        <input type="text" class="form-control" id="mqtt_station_name" 
-                            value="${stationName}" placeholder="e.g. My AIS Station">
+                        <label class="form-label">Station Name</label>
+                        <input type="text" class="form-control" value="${this.val('pref_station_name', '')}" disabled
+                            placeholder="Set in Networking → Station Name">
+                        <div class="form-text">Uses the station name from Networking settings. UUID <code>${antennaUuid || '—'}</code> is the unique station identifier.</div>
                     </div>
                 </div>
             </div>
@@ -745,7 +745,7 @@ var SettingsRenderer = {
         collect('mqtt_topic_raw');
         collect('mqtt_topic_json');
         collect('mqtt_format');
-        collect('mqtt_station_name');
+        // mqtt_station_name removed — uses pref_station_name instead
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');

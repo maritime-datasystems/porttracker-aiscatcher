@@ -815,7 +815,7 @@ class AisReceiverService : Service() {
                 val topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
                 val topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
                 val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
-                val stationName = prefs.getString("mqtt_station_name", "") ?: ""
+                val stationName = prefs.getString("pref_station_name", "") ?: ""
 
                 if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
                     Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
@@ -990,7 +990,7 @@ data class ServiceConfig(
                 mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
                 mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
                 mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
-                mqttStationName = prefs.getString("mqtt_station_name", "") ?: ""
+                mqttStationName = prefs.getString("pref_station_name", "") ?: ""
             )
         }
     }

@@ -612,6 +612,13 @@
             if (id === 'settings' && window.SettingsRenderer) {
                 SettingsRenderer.init();
             }
+
+            // NMEA: auto-start stream when entering, auto-stop when leaving
+            if (id === 'nmea') {
+                startNmeaStream();
+            } else {
+                stopNmeaStream();
+            }
         }
 
         // --- Stats Logic ---
