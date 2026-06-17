@@ -211,9 +211,17 @@ var SettingsRenderer = {
                 </tbody>
             </table>
             
-            <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshSdrStatus()">
-                <i class="bi bi-arrow-clockwise"></i> Refresh Status
-            </button>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshSdrStatus()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh Status
+                </button>
+                <button class="btn btn-outline-primary btn-sm" onclick="SettingsRenderer.requestUsbPermission()">
+                    <i class="bi bi-shield-check"></i> Request USB Permission
+                </button>
+                <button class="btn btn-outline-success btn-sm" onclick="SettingsRenderer.restartEngine()">
+                    <i class="bi bi-play-circle"></i> Restart SDR Engine
+                </button>
+            </div>
             
             <hr>
             <h5 class="mt-4"><i class="bi bi-gear"></i> SDR Configuration</h5>
@@ -774,15 +782,21 @@ var SettingsRenderer = {
             });
 
             if (response.ok) {
-                alert("✅ Settings saved. Restart the app to apply changes.");
                 this.hideLoading();
-                this.init(); // Reload settings from server
+                alert("✅ Settings saved and applied! MQTT and FRP connections have been updated.");
+                // Reload settings from server after a short delay to let changes apply
+                setTimeout(() => { this.init(); }, 1500);
             } else {
-                throw new Error("Save failed");
+                throw new Error("Save failed (HTTP " + response.status + ")");
             }
         } catch (e) {
-            alert("Error saving settings: " + e.message);
             this.hideLoading();
+            // Don't show error for network issues during reload — settings were likely saved
+            if (e.message === "Failed to fetch") {
+                alert("⚠️ Settings saved, but the connection was briefly interrupted. Please refresh the page.");
+            } else {
+                alert("Error saving settings: " + e.message);
+            }
         }
     },
 
@@ -841,6 +855,44 @@ var SettingsRenderer = {
             alert('Error: ' + e.message);
             // Revert checkbox
             document.getElementById('service_enabled').checked = !enable;
+        }
+    },
+
+    requestUsbPermission: async function () {
+        try {
+            // Try native bridge first (works when in app WebView)
+            if (typeof Android !== 'undefined' && Android.requestUsbPermission) {
+                Android.requestUsbPermission();
+                setTimeout(() => this.refreshSdrStatus(), 3000);
+                return;
+            }
+            // Fallback: use API endpoint (works from external browser)
+            const response = await fetch('/admin/api/usb/request_permission', { method: 'POST' });
+            const result = await response.json();
+            if (result.success) {
+                alert('✅ ' + result.message);
+            } else {
+                alert('⚠️ ' + (result.message || result.error || 'Failed'));
+            }
+            setTimeout(() => this.refreshSdrStatus(), 3000);
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    },
+
+    restartEngine: async function () {
+        if (!confirm('Restart the SDR engine? This will re-scan USB devices and reconnect.')) return;
+        try {
+            const response = await fetch('/admin/api/engine/restart', { method: 'POST' });
+            const result = await response.json();
+            if (result.success) {
+                alert('✅ Engine restart triggered. Please wait...');
+            } else {
+                alert('⚠️ ' + (result.error || 'Failed to restart'));
+            }
+            setTimeout(() => this.refreshSdrStatus(), 5000);
+        } catch (e) {
+            alert('Error: ' + e.message);
         }
     },
 

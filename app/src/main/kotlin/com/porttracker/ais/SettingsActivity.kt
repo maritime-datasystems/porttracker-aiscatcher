@@ -47,16 +47,23 @@ class SettingsActivity : AppCompatActivity() {
                 if (granted && device != null) {
                     Log.i(TAG, "USB permission granted for ${device.productName}")
                     Toast.makeText(context, "✅ USB permission granted", Toast.LENGTH_SHORT).show()
-                    // Auto-start service with the device
-                    if (!AisReceiverService.isRunning) {
-                        val serviceIntent = Intent(context, AisReceiverService::class.java).apply {
-                            putExtra("USB_VENDOR_ID", device.vendorId)
-                            putExtra("USB_PRODUCT_ID", device.productId)
-                        }
+                    // Start or restart service with the device
+                    val serviceIntent = Intent(context, AisReceiverService::class.java).apply {
+                        putExtra("USB_VENDOR_ID", device.vendorId)
+                        putExtra("USB_PRODUCT_ID", device.productId)
+                    }
+                    if (AisReceiverService.isRunning) {
+                        // Service is in web-only mode — stop and restart with USB device
+                        Log.i(TAG, "Service running, restarting with USB device...")
+                        stopService(Intent(context, AisReceiverService::class.java))
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            startForegroundService(serviceIntent)
+                        }, 1500)
+                    } else {
                         startForegroundService(serviceIntent)
                     }
                     // Reload web UI to reflect new status
-                    webView?.postDelayed({ loadWebUI() }, 1500)
+                    webView?.postDelayed({ loadWebUI() }, 3000)
                 } else {
                     Toast.makeText(context, "❌ USB permission denied", Toast.LENGTH_SHORT).show()
                 }
@@ -153,18 +160,19 @@ class SettingsActivity : AppCompatActivity() {
             checkAndRequestUsbPermission()
         }, AUTO_START_DELAY)
 
-        // Auto-start service on app launch if enabled (with delay for USB enumeration)
+        // Always start the service (web server is required for the WebView UI).
+        // The auto_start_launch pref controls whether we also try to start the SDR engine.
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         val autoStartOnLaunch = prefs.getBoolean("auto_start_launch", true)
 
-        if (autoStartOnLaunch && !AisReceiverService.isRunning) {
+        if (!AisReceiverService.isRunning) {
             // Delay 3 seconds to allow USB device enumeration and permission
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!AisReceiverService.isRunning) {
-                    // Only start if SDR is connected and has permission
                     val deviceInfo = UsbDeviceScanner.scanForDevices(this)
 
-                    if (deviceInfo.found && deviceInfo.isUsable) {
+                    if (autoStartOnLaunch && deviceInfo.found && deviceInfo.isUsable) {
+                        // Auto-start with SDR device
                         val intent = Intent(this, AisReceiverService::class.java).apply {
                             putExtra("USB_VENDOR_ID", deviceInfo.vendorId)
                             putExtra("USB_PRODUCT_ID", deviceInfo.productId)
@@ -177,7 +185,7 @@ class SettingsActivity : AppCompatActivity() {
                             putExtra("USB_PRODUCT_ID", 0)
                         }
                         startForegroundService(intent)
-                        Toast.makeText(this, "🌐 Starting web server (auto)...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "🌐 Starting web server...", Toast.LENGTH_SHORT).show()
                     }
                 }
             }, BOOT_CHECK_DELAY)
@@ -186,11 +194,29 @@ class SettingsActivity : AppCompatActivity() {
         // Handle USB device attached intent (from "Always open PortTracker" selection)
         handleUsbIntent(intent)
 
-        // Ensure service is running for web server
-        ensureServiceStarted()
+        // Request battery optimization exemption — critical to prevent Android from
+        // killing the service, dropping WiFi, or restricting background activity
+        requestBatteryOptimizationExemption()
 
-        // Load web UI after a brief delay to let the server start
-        webView?.postDelayed({ loadWebUI() }, 1000)
+        // Load web UI after a delay to let the service start via BOOT_CHECK_DELAY
+        webView?.postDelayed({ loadWebUI() }, 4000)
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            Log.i(TAG, "Requesting battery optimization exemption...")
+            val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = android.net.Uri.parse("package:$packageName")
+            }
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not request battery optimization exemption", e)
+            }
+        } else {
+            Log.i(TAG, "Already exempt from battery optimization")
+        }
     }
 
     override fun onResume() {

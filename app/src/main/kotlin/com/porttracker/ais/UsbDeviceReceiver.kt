@@ -35,8 +35,18 @@ class UsbDeviceReceiver : BroadcastReceiver() {
             }
             
             UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                Log.i(TAG, "USB device detached")
-                // Could stop service here if needed
+                val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                if (device != null && SupportedDevices.isSupportedDevice(device.vendorId, device.productId)) {
+                    Log.i(TAG, "Supported SDR device detached: ${device.productName} (VID=${device.vendorId}, PID=${device.productId})")
+                    AisReceiverService.hasDevice = false
+                } else {
+                    Log.i(TAG, "USB device detached (not a supported SDR)")
+                }
             }
             
             ACTION_USB_PERMISSION -> {
@@ -83,8 +93,10 @@ class UsbDeviceReceiver : BroadcastReceiver() {
             Log.i(TAG, "Requesting USB permission...")
             val permissionIntent = PendingIntent.getBroadcast(
                 context, 0,
-                Intent(ACTION_USB_PERMISSION),
-                PendingIntent.FLAG_IMMUTABLE
+                Intent(ACTION_USB_PERMISSION).apply {
+                    setPackage(context.packageName)
+                },
+                PendingIntent.FLAG_MUTABLE
             )
             usbManager.requestPermission(device, permissionIntent)
         }

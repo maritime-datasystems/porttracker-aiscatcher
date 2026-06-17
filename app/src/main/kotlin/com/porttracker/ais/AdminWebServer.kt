@@ -123,9 +123,18 @@ class AdminWebServer(
                         ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
                     
                     if (configManager.updateConfig(jsonString)) {
-                        // Settings saved — do NOT auto-restart, native engine crashes on forceStop
-                        // Settings will apply on next app/service restart
-                        return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_required\":true}")
+                        // Settings saved — apply MQTT and FRP changes live (safe, no native engine restart)
+                        val response = newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_required\":false}")
+                        // Apply FRP and MQTT changes on a background thread after response is sent
+                        Thread {
+                            try {
+                                Thread.sleep(200) // Let HTTP response flush
+                                service.applyLiveConfigChanges()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying live config changes", e)
+                            }
+                        }.start()
+                        return response
                     } else {
                          return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", "{\"status\":\"error\",\"message\":\"Failed to update preferences\"}")
                     }
@@ -196,6 +205,26 @@ class AdminWebServer(
         // --- Health endpoint for remote dashboard monitoring ---
         if (session.method == Method.GET && session.uri == "/admin/api/health") {
             return handleHealth()
+        }
+
+        // USB Permission request — triggers native Android permission dialog via service
+        if (session.method == Method.POST && session.uri == "/admin/api/usb/request_permission") {
+            return handleRequestUsbPermission()
+        }
+        
+        // Engine restart — re-scans USB and restarts the native AIS engine
+        if (session.method == Method.POST && session.uri == "/admin/api/engine/restart") {
+            return handleEngineRestart()
+        }
+
+        // MQTT restart — reconnect MQTT publisher with current preferences
+        if (session.method == Method.POST && session.uri == "/admin/api/mqtt/restart") {
+            return handleMqttRestart()
+        }
+
+        // FRP restart — restart FRP tunnel with current preferences
+        if (session.method == Method.POST && session.uri == "/admin/api/frp/restart") {
+            return handleFrpRestart()
         }
 
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Admin Endpoint Not Found")
@@ -371,7 +400,7 @@ class AdminWebServer(
     // Helper class to inject heartbeats into SSE stream
     private class SseStreamHandler(private val upstream: InputStream) {
         private val pipedOut = java.io.PipedOutputStream()
-        private val pipedIn = java.io.PipedInputStream(pipedOut, 4096)
+        private val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
         private val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
         @Volatile private var isRunning = true
         
@@ -387,13 +416,17 @@ class AdminWebServer(
                     val buffer = ByteArray(4096)
                     var read: Int = 0
                     while (isRunning && upstream.read(buffer).also { read = it } != -1) {
-                        synchronized(pipedOut) {
-                            pipedOut.write(buffer, 0, read)
-                            pipedOut.flush()
+                        try {
+                            synchronized(pipedOut) {
+                                pipedOut.write(buffer, 0, read)
+                                pipedOut.flush()
+                            }
+                        } catch (e: java.io.IOException) {
+                            break
                         }
                     }
                 } catch (e: Exception) {
-                    // Log.d("SseProxy", "Relay finished/error: ${e.message}")
+                    // Stream ended or error
                 } finally {
                     close()
                 }
@@ -408,13 +441,20 @@ class AdminWebServer(
                 try {
                     while (isRunning) {
                         Thread.sleep(2000)
-                        synchronized(pipedOut) {
-                            pipedOut.write(heartbeat)
-                            pipedOut.flush()
+                        try {
+                            synchronized(pipedOut) {
+                                pipedOut.write(heartbeat)
+                                pipedOut.flush()
+                            }
+                        } catch (e: java.io.IOException) {
+                            // Pipe broken — client disconnected
+                            break
                         }
                     }
                 } catch (e: Exception) {
                     // Ignore
+                } finally {
+                    close()
                 }
             }
         }
@@ -436,7 +476,7 @@ class AdminWebServer(
      */
     private fun handleNmeaSse(): Response {
         val pipedOut = java.io.PipedOutputStream()
-        val pipedIn = java.io.PipedInputStream(pipedOut, 8192)
+        val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
         val isOpen = java.util.concurrent.atomic.AtomicBoolean(true)
 
         val listener = object : AisReceiverService.Companion.NMEAListener {
@@ -591,6 +631,8 @@ class AdminWebServer(
 
         val result = JSONObject().apply {
             put("station_name", prefs.getString("pref_station_name", "") ?: "")
+            put("antenna_uuid", prefs.getString("mqtt_antenna_uuid", "") ?: "")
+            put("mqtt_username", prefs.getString("mqtt_username", "") ?: "")
             put("service_running", AisReceiverService.isRunning)
             put("sdr_connected", AisReceiverService.hasDevice)
             put("sdr_device", if (deviceInfo.found) deviceInfo.deviceName else "none")
@@ -613,6 +655,99 @@ class AdminWebServer(
             put("timestamp", System.currentTimeMillis())
         }
         return newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
+    }
+
+    /**
+     * POST /admin/api/usb/request_permission
+     * Scans for SDR devices and requests USB permission if needed.
+     */
+    private fun handleRequestUsbPermission(): Response {
+        val ctx = service.applicationContext
+        val deviceInfo = UsbDeviceScanner.scanForDevices(ctx)
+        
+        if (!deviceInfo.found) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":false,"message":"No SDR device connected"}""")
+        }
+        
+        if (deviceInfo.isUsable) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"Permission already granted","device":"${deviceInfo.deviceName}"}""")
+        }
+        
+        // Device found but no permission — request it
+        try {
+            val usbManager = ctx.getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager
+            for ((_, device) in usbManager.deviceList) {
+                if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
+                    val permissionIntent = android.app.PendingIntent.getBroadcast(
+                        ctx, 0,
+                        android.content.Intent("com.porttracker.ais.USB_PERMISSION").apply {
+                            setPackage(ctx.packageName)
+                        },
+                        android.app.PendingIntent.FLAG_MUTABLE
+                    )
+                    usbManager.requestPermission(device, permissionIntent)
+                    return newFixedLengthResponse(Response.Status.OK, "application/json",
+                        """{"success":true,"message":"Permission requested for ${deviceInfo.deviceName}","device":"${deviceInfo.deviceName}"}""")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting USB permission", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+        
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            """{"success":false,"message":"Could not find device to request permission"}""")
+    }
+    
+    /**
+     * POST /admin/api/engine/restart
+     * Re-scans USB devices and restarts the AIS engine.
+     */
+    private fun handleEngineRestart(): Response {
+        try {
+            service.triggerEngineRestart()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"Engine restart triggered"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error triggering engine restart", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+    }
+
+    /**
+     * POST /admin/api/mqtt/restart
+     * Stops and restarts the MQTT publisher with current preferences.
+     */
+    private fun handleMqttRestart(): Response {
+        try {
+            service.restartMqttPublisher()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"MQTT publisher restarted"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting MQTT", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+    }
+
+    /**
+     * POST /admin/api/frp/restart
+     * Restarts the FRP tunnel with current preferences.
+     */
+    private fun handleFrpRestart(): Response {
+        try {
+            service.restartFrpTunnel()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"FRP tunnel restarted"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting FRP", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
     }
 
     /**
