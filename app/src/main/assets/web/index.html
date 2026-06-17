@@ -425,6 +425,8 @@
         let mapFitted = false;
         let vesselCountControl = null;
         let pollTimer = null;
+        let dbVessels = {};       // mmsi -> persistent DB record (name fallback)
+        let dbNamesTimer = null;
 
         // Colour by AIS ship-type class (MarineTraffic-style).
         function shipColor(t) {
@@ -470,11 +472,42 @@
             });
         }
 
+        // Fill in static fields (name/imo/callsign/type/dest) from the persistent
+        // DB when the live feed lacks them — e.g. right after an engine restart
+        // before each vessel re-broadcasts its Type 5. Sets a display name that
+        // never falls back to a bare "Unknown".
+        function enrichShip(ship) {
+            const hadLiveName = !!ship.shipname;
+            const db = dbVessels[ship.mmsi];
+            if (db) {
+                if (!ship.shipname && db.name) ship.shipname = db.name;
+                if (!ship.imo && db.imo) ship.imo = db.imo;
+                if (!ship.callsign && db.callsign) ship.callsign = db.callsign;
+                if (!ship.destination && db.destination) ship.destination = db.destination;
+                if (!ship.shiptype && db.ship_type) ship.shiptype = db.ship_type;
+            }
+            ship._name = ship.shipname || ('MMSI ' + ship.mmsi);
+            ship._cached = !hadLiveName && !!ship.shipname; // name came from cache
+            return ship;
+        }
+
+        async function refreshDbNames() {
+            try {
+                const res = await fetch('/admin/api/vessels?limit=2000');
+                if (!res.ok) return;
+                const data = await res.json();
+                const idx = {};
+                (data.vessels || []).forEach(v => { idx[v.mmsi] = v; });
+                dbVessels = idx;
+            } catch (e) { /* internal DB may be disabled — ignore */ }
+        }
+
         function shipPopup(ship) {
             const f = (label, val) => (val != null && val !== '')
                 ? `<tr><td style="color:#666;padding-right:10px;white-space:nowrap;">${label}</td><td>${escapeHtml(String(val))}</td></tr>` : '';
+            const cachedTag = ship._cached ? ' <span style="font-size:10px;color:#888;font-weight:normal;">(cached)</span>' : '';
             return `<div style="min-width:190px;">
-                <b style="font-size:14px;">${escapeHtml(ship.shipname || 'Unknown')}</b>
+                <b style="font-size:14px;">${escapeHtml(ship._name || ship.shipname || ('MMSI ' + ship.mmsi))}</b>${cachedTag}
                 <table style="font-size:12px;margin-top:4px;border-collapse:collapse;">
                     ${f('MMSI', ship.mmsi)}
                     ${f('IMO', ship.imo)}
@@ -537,6 +570,8 @@
 
             mapInitialized = true;
             mapFitted = false;
+            refreshDbNames();           // load DB name fallback, refresh periodically
+            if (!dbNamesTimer) dbNamesTimer = setInterval(refreshDbNames, 30000);
             pollShips();
             if (!pollTimer) pollTimer = setInterval(pollShips, 3000);
 
@@ -576,8 +611,10 @@
 
                 const mmsi = ship.mmsi;
                 const lat = ship.lat, lon = ship.lon;
-                const name = ship.shipname || "Unknown";
                 if (lat == null || lon == null) return;
+
+                enrichShip(ship);            // fill name/type from DB cache if live feed lacks them
+                const name = ship._name;
 
                 currentMmsis.add(String(mmsi));
                 latlngs.push([lat, lon]);
