@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -30,6 +31,7 @@ import androidx.preference.PreferenceManager
 class SettingsActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
+    private var webContainer: LinearLayout? = null
 
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
 
@@ -124,26 +126,9 @@ class SettingsActivity : AppCompatActivity() {
         rootLayout.addView(headerLayout)
 
         // 2. WebView
-        webView = WebView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f)
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-            webViewClient = object : WebViewClient() {
-                override fun onReceivedError(
-                    view: WebView?,
-                    request: WebResourceRequest?,
-                    error: WebResourceError?
-                ) {
-                    // Web server not ready yet — retry after delay
-                    view?.postDelayed({ loadWebUI() }, 2000)
-                }
-            }
-            webChromeClient = WebChromeClient()
-            addJavascriptInterface(WebBridge(), "Android")
-        }
+        webView = createWebView()
         rootLayout.addView(webView)
+        webContainer = rootLayout
 
         setContentView(rootLayout)
 
@@ -255,6 +240,60 @@ class SettingsActivity : AppCompatActivity() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         val port = prefs.getString("pref_local_web_port", "8080") ?: "8080"
         webView?.loadUrl("http://127.0.0.1:$port/")
+    }
+
+    /** Build a fully-configured WebView. Extracted so it can be rebuilt if the
+     *  render process is killed (see [recreateWebView]). */
+    private fun createWebView(): WebView = WebView(this).apply {
+        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f)
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.mediaPlaybackRequiresUserGesture = false
+        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        webViewClient = object : WebViewClient() {
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                // Only reload for MAIN-FRAME failures (local server not ready yet).
+                // A failed subresource — e.g. an external map tile when internet
+                // drops — must NOT trigger a full page reload, or the UI thrashes.
+                if (request?.isForMainFrame == true) {
+                    view?.postDelayed({ loadWebUI() }, 2000)
+                }
+            }
+
+            override fun onRenderProcessGone(
+                view: WebView?,
+                detail: RenderProcessGoneDetail?
+            ): Boolean {
+                // Android killed the WebView's render process (memory pressure or
+                // a connectivity change while backgrounded). The surface is now a
+                // dead black view that can't recover in place and survives even
+                // when connectivity returns — so rebuild it. Returning true keeps
+                // the app alive instead of letting the system terminate it.
+                Log.w(TAG, "WebView render process gone (crash=${detail?.didCrash()}); recreating")
+                recreateWebView(view)
+                return true
+            }
+        }
+        webChromeClient = WebChromeClient()
+        addJavascriptInterface(WebBridge(), "Android")
+    }
+
+    /** Replace a dead WebView with a fresh one in the same layout slot. */
+    private fun recreateWebView(dead: WebView?) {
+        val container = webContainer ?: return
+        val idx = dead?.let { container.indexOfChild(it) }?.takeIf { it >= 0 } ?: container.childCount
+        if (dead != null) {
+            container.removeView(dead)
+            try { dead.destroy() } catch (_: Exception) {}
+        }
+        val fresh = createWebView()
+        container.addView(fresh, idx)
+        webView = fresh
+        loadWebUI()
     }
 
     /** JavaScript bridge exposed to the WebView as `Android.requestUsbPermission()` */
