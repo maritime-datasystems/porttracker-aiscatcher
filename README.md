@@ -39,6 +39,28 @@ cd aiscatcher_porttracker
 ./gradlew assembleDebug
 ```
 
+## Remote access (FRP) binary
+
+Remote access tunnels the local web interface to the PortTracker FRP server
+using the `frpc` client. That binary is **not committed** to the repo (~13-15 MB
+per ABI) and is gitignored. Fetch it before building if you need remote access:
+
+```bash
+scripts/fetch-frpc.sh          # defaults to frp 0.61.2 (compatible with the PortTracker frps)
+# or pin a version:
+scripts/fetch-frpc.sh 0.61.2
+```
+
+This downloads `frpc` from the [frp releases](https://github.com/fatedier/frp/releases)
+and stages it as `app/src/main/jniLibs/<abi>/libfrpc.so` for arm64-v8a,
+armeabi-v7a and x86_64. Android executes it from the app's native library
+directory at runtime (see `FrpTunnelManager`).
+
+The app **builds and runs without it** — remote access just won't start
+(`FrpTunnelManager` logs "Binary not found in native lib dir" and the rest of
+the app is unaffected). Choose a frpc version compatible with your frps; any
+frpc >= 0.52 supports the TOML config the app generates.
+
 ## Configuration
 
 ### Via Settings UI
