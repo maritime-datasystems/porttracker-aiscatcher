@@ -422,30 +422,121 @@
         let map = null;
         let markers = {};
         let mapInitialized = false;
+        let mapFitted = false;
+        let vesselCountControl = null;
         let pollTimer = null;
 
-        function getShipIcon(heading) {
-            const rot = heading || 0;
+        // Colour by AIS ship-type class (MarineTraffic-style).
+        function shipColor(t) {
+            t = t || 0;
+            if (t >= 60 && t <= 69) return '#1976D2'; // passenger – blue
+            if (t >= 70 && t <= 79) return '#2E7D32'; // cargo – green
+            if (t >= 80 && t <= 89) return '#C62828'; // tanker – red
+            if (t === 30) return '#6D4C41';           // fishing – brown
+            if (t === 31 || t === 32 || t === 52) return '#00838F'; // tug/tow – teal
+            if (t >= 33 && t <= 37) return '#7B1FA2'; // hsc/sailing/pleasure – purple
+            if (t >= 50 && t <= 59) return '#F9A825'; // special (pilot/SAR/port) – amber
+            return '#546E7A';                          // other/unknown – grey
+        }
+
+        // Direction: prefer true heading (AIS 511 = N/A), else course over ground.
+        function shipDir(ship) {
+            if (ship.heading != null && ship.heading < 360) return ship.heading;
+            if (ship.cog != null && ship.cog < 360) return ship.cog;
+            return null;
+        }
+
+        function getShipIcon(ship) {
+            const color = shipColor(ship.shiptype);
+            const moving = (ship.speed || 0) > 0.5;
+            const dir = shipDir(ship);
+            if (moving && dir != null) {
+                // Directional arrow pointing the way the vessel is going.
+                return L.divIcon({
+                    className: 'ship-icon',
+                    html: `<svg width="22" height="22" viewBox="0 0 24 24" style="transform: rotate(${dir}deg); filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));">
+                            <path d="M12 2L2 22L12 18L22 22L12 2Z" fill="${color}" stroke="white" stroke-width="2"/>
+                           </svg>`,
+                    iconSize: [22, 22], iconAnchor: [11, 11]
+                });
+            }
+            // Stationary / moored / no direction → dot.
             return L.divIcon({
                 className: 'ship-icon',
-                html: `<svg width="24" height="24" viewBox="0 0 24 24" style="transform: rotate(${rot}deg); filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));">
-                        <path d="M12 2L2 22L12 18L22 22L12 2Z" fill="#005f73" stroke="white" stroke-width="2"/>
+                html: `<svg width="14" height="14" viewBox="0 0 14 14" style="filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.5));">
+                        <circle cx="7" cy="7" r="5" fill="${color}" stroke="white" stroke-width="2"/>
                        </svg>`,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
+                iconSize: [14, 14], iconAnchor: [7, 7]
             });
+        }
+
+        function shipPopup(ship) {
+            const f = (label, val) => (val != null && val !== '')
+                ? `<tr><td style="color:#666;padding-right:10px;white-space:nowrap;">${label}</td><td>${escapeHtml(String(val))}</td></tr>` : '';
+            return `<div style="min-width:190px;">
+                <b style="font-size:14px;">${escapeHtml(ship.shipname || 'Unknown')}</b>
+                <table style="font-size:12px;margin-top:4px;border-collapse:collapse;">
+                    ${f('MMSI', ship.mmsi)}
+                    ${f('IMO', ship.imo)}
+                    ${f('Callsign', ship.callsign)}
+                    ${f('Type', ship.shiptype)}
+                    ${f('Speed', ship.speed != null ? ship.speed + ' kn' : '')}
+                    ${f('Course', ship.cog != null && ship.cog < 360 ? ship.cog + '°' : '')}
+                    ${f('Heading', ship.heading != null && ship.heading < 360 ? ship.heading + '°' : '')}
+                    ${f('Destination', ship.destination)}
+                    ${f('Draught', ship.draught ? ship.draught + ' m' : '')}
+                    ${f('Distance', ship.distance != null ? Number(ship.distance).toFixed(1) + ' NM' : '')}
+                </table>
+                <button onclick="showVesselFromMap(${ship.mmsi})" style="margin-top:8px;padding:4px 12px;background:#2196F3;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Details &rarr;</button>
+            </div>`;
+        }
+
+        // Open the DB detail page for a vessel clicked on the map.
+        function showVesselFromMap(mmsi) {
+            const link = [...document.querySelectorAll('nav a')]
+                .find(a => (a.getAttribute('onclick') || '').includes("'db'"));
+            showSection('db', link);
+            showVesselDetail(mmsi);
         }
 
         function initMap() {
             if (mapInitialized) return;
 
-            map = L.map('leaflet_map').setView([51.505, -0.09], 10); // Standard default
+            map = L.map('leaflet_map', { zoomControl: true }).setView([51.505, -0.09], 10);
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap contributors'
+                attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
             }).addTo(map);
 
+            L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+            // Vessel-count badge (top-right).
+            vesselCountControl = L.control({ position: 'topright' });
+            vesselCountControl.onAdd = function () {
+                const div = L.DomUtil.create('div');
+                div.id = 'vessel_count_badge';
+                div.style.cssText = 'background:rgba(255,255,255,0.9);padding:4px 10px;border-radius:4px;font-size:13px;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,0.3);';
+                div.innerHTML = '0 vessels';
+                return div;
+            };
+            vesselCountControl.addTo(map);
+
+            // Colour legend (bottom-left).
+            const legend = L.control({ position: 'bottomleft' });
+            legend.onAdd = function () {
+                const div = L.DomUtil.create('div');
+                div.style.cssText = 'background:rgba(255,255,255,0.9);padding:6px 8px;border-radius:4px;font-size:11px;line-height:1.6;box-shadow:0 1px 4px rgba(0,0,0,0.3);';
+                const item = (c, t) => `<span style="display:inline-block;width:10px;height:10px;background:${c};border-radius:2px;margin-right:4px;"></span>${t}`;
+                div.innerHTML =
+                    item('#2E7D32', 'Cargo') + '<br>' + item('#C62828', 'Tanker') + '<br>' +
+                    item('#1976D2', 'Passenger') + '<br>' + item('#00838F', 'Tug') + '<br>' +
+                    item('#F9A825', 'Special') + '<br>' + item('#546E7A', 'Other');
+                return div;
+            };
+            legend.addTo(map);
+
             mapInitialized = true;
+            mapFitted = false;
             pollShips();
             if (!pollTimer) pollTimer = setInterval(pollShips, 3000);
 
@@ -472,10 +563,9 @@
         ];
 
         function updateMapMarkers(shipRows) {
-            const currentMmsis = new Set();
             if (!shipRows) return;
-
-            let firstShip = true;
+            const currentMmsis = new Set();
+            const latlngs = [];
 
             shipRows.forEach(row => {
                 // Map array to object
@@ -485,45 +575,47 @@
                 });
 
                 const mmsi = ship.mmsi;
-                const lat = ship.lat;
-                const lon = ship.lon;
-                const heading = ship.heading || 0; // "heading", not "hdg"
+                const lat = ship.lat, lon = ship.lon;
                 const name = ship.shipname || "Unknown";
-
-                if (lat == null || lat === undefined || lon == null || lon === undefined) return;
+                if (lat == null || lon == null) return;
 
                 currentMmsis.add(String(mmsi));
+                latlngs.push([lat, lon]);
+
+                // Re-icon only when the visual inputs change (cheap on busy maps).
+                const iconKey = [shipDir(ship), (ship.speed || 0) > 0.5, ship.shiptype].join('|');
 
                 if (markers[mmsi]) {
-                    markers[mmsi].setLatLng([lat, lon]);
-                    if (markers[mmsi]._lastHeading !== heading) {
-                        markers[mmsi].setIcon(getShipIcon(heading));
-                        markers[mmsi]._lastHeading = heading;
-                    }
-                    markers[mmsi].setPopupContent(`<b>${escapeHtml(name)}</b><br>MMSI: ${mmsi}<br>Speed: ${ship.speed} kn`);
+                    const m = markers[mmsi];
+                    m.setLatLng([lat, lon]);
+                    if (m._iconKey !== iconKey) { m.setIcon(getShipIcon(ship)); m._iconKey = iconKey; }
+                    m.setTooltipContent(escapeHtml(name));
+                    m.setPopupContent(shipPopup(ship));
                 } else {
-                    const marker = L.marker([lat, lon], {
-                        icon: getShipIcon(heading)
-                    }).addTo(map)
-                        .bindPopup(`<b>${escapeHtml(name)}</b><br>MMSI: ${mmsi}<br>Speed: ${ship.speed} kn`);
-
-                    marker._lastHeading = heading;
-                    markers[mmsi] = marker;
+                    const m = L.marker([lat, lon], { icon: getShipIcon(ship) }).addTo(map)
+                        .bindTooltip(escapeHtml(name), { direction: 'top', offset: [0, -8] })
+                        .bindPopup(shipPopup(ship));
+                    m._iconKey = iconKey;
+                    markers[mmsi] = m;
                 }
-
-                // Auto Center on first ship if not moved yet
-                if (firstShip && map.getZoom() === 10 && Math.abs(map.getCenter().lat - 51.505) < 0.001) {
-                    map.setView([lat, lon], 12);
-                }
-                firstShip = false;
             });
 
+            // Remove vessels no longer present.
             for (let mmsi in markers) {
                 if (!currentMmsis.has(mmsi)) {
                     map.removeLayer(markers[mmsi]);
                     delete markers[mmsi];
                 }
             }
+
+            // Fit to all vessels once on first data (instead of guessing one ship).
+            if (!mapFitted && latlngs.length > 0) {
+                map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 13 });
+                mapFitted = true;
+            }
+
+            const badge = document.getElementById('vessel_count_badge');
+            if (badge) badge.innerHTML = currentMmsis.size + ' vessel' + (currentMmsis.size === 1 ? '' : 's');
         }
 
         // --- NMEA Logic (polling) ---
