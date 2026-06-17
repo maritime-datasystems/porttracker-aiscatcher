@@ -343,6 +343,8 @@
                         <tbody id="db_detail_rows"></tbody>
                     </table>
                 </div>
+                <h3 style="margin: 16px 0 6px 0;">Track <span id="detail_track_info" style="font-size: 13px; color: #666; font-weight: normal;"></span></h3>
+                <div id="detail_map" style="width: 100%; height: 300px; border-radius: 8px; border: 1px solid #ddd;"></div>
             </div>
         </section>
 
@@ -527,6 +529,7 @@
                     ${f('Length', (ship.to_bow != null && ship.to_stern != null) ? (ship.to_bow + ship.to_stern) + ' m' : '')}
                     ${f('Distance', ship.distance != null ? Number(ship.distance).toFixed(1) + ' NM' : '')}
                 </table>
+                <button onclick="showTrackOnMap(${ship.mmsi})" style="margin-top:8px;margin-right:6px;padding:4px 12px;background:#d32f2f;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Track</button>
                 <button onclick="showVesselFromMap(${ship.mmsi})" style="margin-top:8px;padding:4px 12px;background:#2196F3;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Details &rarr;</button>
             </div>`;
         }
@@ -537,6 +540,28 @@
                 .find(a => (a.getAttribute('onclick') || '').includes("'db'"));
             showSection('db', link);
             showVesselDetail(mmsi);
+        }
+
+        // Draw a vessel's recent track as a polyline on the main map.
+        let trackLayer = null;
+        async function showTrackOnMap(mmsi) {
+            if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
+            try {
+                const res = await fetch('/admin/api/vessel/track?mmsi=' + mmsi + '&limit=5000');
+                const data = await res.json();
+                const pts = (data.points || []).map(p => [p.lat, p.lon]);
+                if (pts.length < 1) { alert('No track history stored yet for ' + mmsi + '.\nEnable "Log vessel positions" and let it run.'); return; }
+                trackLayer = L.layerGroup();
+                if (pts.length >= 2) L.polyline(pts, { color: '#d32f2f', weight: 3, opacity: 0.85 }).addTo(trackLayer);
+                data.points.forEach(p => L.circleMarker([p.lat, p.lon], { radius: 3, color: '#d32f2f', weight: 1, fillColor: '#fff', fillOpacity: 1 })
+                    .bindTooltip(new Date(p.ts).toLocaleString() + (p.sog != null ? ' · ' + p.sog + ' kn' : ''))
+                    .addTo(trackLayer));
+                trackLayer.addTo(map);
+                map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+            } catch (e) { console.error('track error', e); }
+        }
+        function clearTrackOnMap() {
+            if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
         }
 
         function initMap() {
@@ -574,6 +599,17 @@
                 return div;
             };
             legend.addTo(map);
+
+            // Clear-track button (bottom-right).
+            const clearTrack = L.control({ position: 'bottomright' });
+            clearTrack.onAdd = function () {
+                const div = L.DomUtil.create('div');
+                div.style.cssText = 'background:rgba(255,255,255,0.9);padding:4px 8px;border-radius:4px;font-size:12px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.3);';
+                div.innerHTML = '✕ clear track';
+                L.DomEvent.on(div, 'click', function (e) { L.DomEvent.stop(e); clearTrackOnMap(); });
+                return div;
+            };
+            clearTrack.addTo(map);
 
             mapInitialized = true;
             mapFitted = false;
@@ -877,6 +913,47 @@
             } catch (e) {
                 tbody.innerHTML = '<tr><td style="padding:6px;">Error: ' + escapeHtml(String(e)) + '</td></tr>';
             }
+            renderDetailTrack(mmsi);
+        }
+
+        // --- Detail-page track mini-map ---
+        let detailMap = null;
+        let detailTrackLayer = null;
+        function renderDetailTrack(mmsi) {
+            const info = document.getElementById('detail_track_info');
+            if (!detailMap) {
+                detailMap = L.map('detail_map');
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(detailMap);
+                detailMap.setView([53.5, 9.9], 9);
+            }
+            // The container was display:none until now — Leaflet needs a resize nudge.
+            setTimeout(() => detailMap.invalidateSize(), 120);
+            if (detailTrackLayer) { detailMap.removeLayer(detailTrackLayer); detailTrackLayer = null; }
+            if (info) info.textContent = 'loading…';
+
+            fetch('/admin/api/vessel/track?mmsi=' + encodeURIComponent(mmsi) + '&limit=5000')
+                .then(r => r.json())
+                .then(data => {
+                    const points = data.points || [];
+                    const pts = points.map(p => [p.lat, p.lon]);
+                    if (pts.length < 1) {
+                        if (info) info.textContent = '— no positions stored yet (enable "Log vessel positions")';
+                        return;
+                    }
+                    if (info) info.textContent = '· ' + pts.length + ' point' + (pts.length === 1 ? '' : 's');
+                    detailTrackLayer = L.layerGroup();
+                    if (pts.length >= 2) L.polyline(pts, { color: '#d32f2f', weight: 3, opacity: 0.85 }).addTo(detailTrackLayer);
+                    points.forEach(p => L.circleMarker([p.lat, p.lon], { radius: 3, color: '#d32f2f', weight: 1, fillColor: '#fff', fillOpacity: 1 })
+                        .bindTooltip(new Date(p.ts).toLocaleString() + (p.sog != null ? ' · ' + p.sog + ' kn' : ''))
+                        .addTo(detailTrackLayer));
+                    // Emphasise the most recent position.
+                    L.circleMarker(pts[pts.length - 1], { radius: 6, color: '#d32f2f', weight: 2, fillColor: '#d32f2f', fillOpacity: 0.9 }).addTo(detailTrackLayer);
+                    detailTrackLayer.addTo(detailMap);
+                    setTimeout(() => { detailMap.invalidateSize(); detailMap.fitBounds(pts, { padding: [30, 30], maxZoom: 14 }); }, 140);
+                })
+                .catch(e => { if (info) info.textContent = 'error loading track'; console.error(e); });
         }
 
         // --- Stats Logic ---
