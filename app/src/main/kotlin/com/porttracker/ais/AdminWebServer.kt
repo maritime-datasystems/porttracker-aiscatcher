@@ -614,15 +614,29 @@ class AdminWebServer(
                 ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
                     """{"success":false,"error":"Invalid API key or network error"}""")
 
-            // Persist to SharedPreferences
+            // Persist to SharedPreferences.
+            // IMPORTANT: write the *canonical* keys that ServiceConfig,
+            // MqttPublisher and the health endpoint actually read
+            // (pref_station_name, mqtt_username, mqtt_password) — the previous
+            // version wrote mqtt_user_name (consumed nowhere) from the account
+            // name and never persisted the MQTT credentials, so provisioning
+            // via this endpoint never reached the publisher.
+            // NOTE: station-config returns topic_prefix only, not the full
+            // topic_raw/topic_json; those still come from the paste/QR config
+            // flow, so MQTT topics are intentionally left untouched here.
             val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
             prefs.edit()
                 .putBoolean("mqtt_enabled", true)
                 .putString("mqtt_api_key", apiKey)
+                // Canonical keys read by the rest of the app:
+                .putString("pref_station_name", stationConfig.portName)
+                .putString("mqtt_username", stationConfig.mqttUsername)
+                .putString("mqtt_password", stationConfig.mqttPassword)
+                .putString("mqtt_broker_url", stationConfig.brokerUrl)
+                // Metadata kept for the gateway/status display:
                 .putString("mqtt_station_name", stationConfig.portName)
                 .putInt("mqtt_antenna_id", stationConfig.antennaId)
                 .putInt("mqtt_port_id", stationConfig.portId)
-                .putString("mqtt_broker_url", stationConfig.brokerUrl)
                 .putString("mqtt_user_name", stationConfig.userName)
                 .putString("mqtt_company_name", stationConfig.companyName)
                 .apply()
@@ -683,22 +697,17 @@ class AdminWebServer(
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
         } catch (e: Exception) { "unknown" }
 
+        // NOTE: this endpoint is intentionally unauthenticated (polled by the
+        // remote dashboard through the public tunnel), so it must NOT expose
+        // locating or credential data. Sensitive fields deliberately omitted:
+        // GPS coordinates (gps_lat/gps_lon), mqtt_username, antenna_uuid.
         val result = JSONObject().apply {
             put("station_name", prefs.getString("pref_station_name", "") ?: "")
-            put("antenna_uuid", prefs.getString("mqtt_antenna_uuid", "") ?: "")
-            put("mqtt_username", prefs.getString("mqtt_username", "") ?: "")
             put("service_running", AisReceiverService.isRunning)
             put("sdr_connected", AisReceiverService.hasDevice)
             put("sdr_device", if (deviceInfo.found) deviceInfo.deviceName else "none")
             put("ais_msg_count", AisReceiverService.messageCount)
             put("gps_locked", GpsForwarder.hasPosition)
-            if (GpsForwarder.hasPosition) {
-                put("gps_lat", GpsForwarder.lastLatitude)
-                put("gps_lon", GpsForwarder.lastLongitude)
-            }
-            if (GpsForwarder.hasHeading) {
-                put("gps_heading", GpsForwarder.lastHeading)
-            }
             put("mqtt_connected", MqttPublisher.isConnected)
             put("mqtt_messages_sent", MqttPublisher.messagesSent)
             put("mqtt_enabled", prefs.getBoolean("mqtt_enabled", false))
@@ -805,39 +814,76 @@ class AdminWebServer(
     }
 
     /**
-     * Check HTTP Basic Authentication if enabled in settings.
-     * Returns null if auth passes or is disabled, returns 401 response if auth fails.
+     * Decide whether a request arrived via the remote FRP tunnel.
+     *
+     * The frpc client forwards tunnelled traffic to the local web port, so
+     * [IHTTPSession.remoteIpAddress] is 127.0.0.1 for both the in-app WebView
+     * AND remote visitors — peer IP alone cannot tell them apart. We instead
+     * key off the HTTP layer: the tunnel sets X-Forwarded-For and a public
+     * Host header (a DNS name), whereas local/LAN access uses an IP-literal or
+     * "localhost" Host. Anything that looks like a public hostname is treated
+     * as remote and must authenticate.
+     */
+    private fun isRemoteRequest(session: IHTTPSession): Boolean {
+        // FRP's http proxy injects this for tunnelled requests.
+        if (!session.headers["x-forwarded-for"].isNullOrBlank()) return true
+
+        val host = (session.headers["host"] ?: "").substringBefore(":").trim().lowercase()
+        if (host.isEmpty()) return false
+        if (host == "localhost" || host == "127.0.0.1" || host == "::1") return false
+
+        // IP literals (incl. LAN addresses like 192.168.x.x) are local access.
+        // A DNS name (the public subdomain) means the request came in remotely.
+        val isIpLiteral = host.matches(Regex("^[0-9.]+$")) || host.contains(':')
+        return !isIpLiteral
+    }
+
+    /** Exact loopback match — used only to short-circuit the in-app WebView. */
+    private fun isLoopbackAddress(ip: String): Boolean {
+        return ip == "127.0.0.1" ||
+            ip == "::1" ||
+            ip == "0:0:0:0:0:0:0:1" ||
+            ip == "::ffff:127.0.0.1" ||
+            ip.equals("localhost", ignoreCase = true)
+    }
+
+    /**
+     * Check HTTP Basic Authentication.
+     *
+     * Policy ("gate remote only, fail-closed"):
+     *  - Remote (tunnelled) requests ALWAYS require credentials — even though
+     *    they reach us on 127.0.0.1 — and are denied if none are configured.
+     *  - Local/LAN requests are open by default; they only require auth when the
+     *    user explicitly enables web_auth_enabled (and never for the loopback
+     *    in-app WebView).
+     *
+     * Returns null if auth passes/not required, or a 401 response if it fails.
      */
     private fun checkAuthentication(session: IHTTPSession): Response? {
         val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
-        
-        // Check if authentication is enabled
+
+        val isRemote = isRemoteRequest(session)
         val authEnabled = prefs.getBoolean("web_auth_enabled", false)
-        if (!authEnabled) {
-            return null // Auth disabled, allow access
+        val remoteIp = session.remoteIpAddress ?: ""
+        Log.d(TAG, "Auth check: remoteIp=$remoteIp isRemote=$isRemote authEnabled=$authEnabled")
+
+        if (!isRemote) {
+            // Local or LAN access.
+            if (!authEnabled) return null                       // open by default
+            if (isLoopbackAddress(remoteIp)) return null         // in-app WebView always allowed
+            // authEnabled + LAN: fall through to credential check below.
         }
 
-        // Always allow local access (in-app WebView uses 127.0.0.1)
-        val remoteIp = session.remoteIpAddress ?: ""
-        Log.d(TAG, "Auth check: remoteIp=$remoteIp authEnabled=$authEnabled")
-        if (remoteIp == "127.0.0.1" || 
-            remoteIp == "::1" || 
-            remoteIp == "0:0:0:0:0:0:0:1" || 
-            remoteIp.startsWith("127.") || 
-            remoteIp.endsWith("127.0.0.1") || 
-            remoteIp.startsWith("::ffff:127.") ||
-            remoteIp.equals("localhost", ignoreCase = true)) {
-            return null // Local access, skip auth
-        }
-        
         val requiredUsername = prefs.getString("web_auth_username", "") ?: ""
         val requiredPassword = prefs.getString("web_auth_password", "") ?: ""
-        
-        // If no credentials configured, skip auth
+
+        // No credentials configured: fail closed for remote, allow for local
+        // (the local user has no way to authenticate, and the tunnel is gated
+        // separately so it should never start without credentials).
         if (requiredUsername.isEmpty() || requiredPassword.isEmpty()) {
-            return null
+            return if (isRemote) createUnauthorizedResponse() else null
         }
-        
+
         // Get Authorization header
         val authHeader = session.headers["authorization"]
         

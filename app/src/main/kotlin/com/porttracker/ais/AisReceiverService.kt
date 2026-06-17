@@ -278,6 +278,13 @@ class AisReceiverService : Service() {
             frpTunnelManager = FrpTunnelManager(this)
         }
         if (enabled && stationName.isNotEmpty()) {
+            // Fail closed: never expose the web UI over the remote tunnel without
+            // credentials. Generate one if the user hasn't set any.
+            if (!ensureRemoteAuthConfigured()) {
+                Log.e(TAG, "Remote access NOT started — could not configure auth credentials")
+                InternalLog.log("Remote access NOT started: failed to configure credentials")
+                return
+            }
             if (frpTunnelManager?.isRunning() != true) {
                 Log.i(TAG, "Starting FRP tunnel for $stationName...")
                 if (frpTunnelManager?.startTunnel(stationName, port) == true) {
@@ -291,6 +298,51 @@ class AisReceiverService : Service() {
                 Log.i(TAG, "Stopping FRP tunnel")
                 frpTunnelManager?.stopTunnel()
             }
+        }
+    }
+
+    /**
+     * Ensure web-auth credentials exist before the remote tunnel is exposed.
+     *
+     * Remote (tunnelled) requests always require Basic auth, so if the user
+     * enabled remote access without setting credentials we auto-generate a
+     * password (username defaults to "admin"), enable web auth, and surface the
+     * password in the internal log so the operator can retrieve it from the UI.
+     *
+     * @return true if credentials are present afterwards.
+     */
+    private fun ensureRemoteAuthConfigured(): Boolean {
+        return try {
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+            val user = prefs.getString("web_auth_username", "") ?: ""
+            val pass = prefs.getString("web_auth_password", "") ?: ""
+
+            if (user.isNotEmpty() && pass.isNotEmpty()) {
+                // Make sure enforcement is on for the non-local path.
+                if (!prefs.getBoolean("web_auth_enabled", false)) {
+                    prefs.edit().putBoolean("web_auth_enabled", true).apply()
+                }
+                return true
+            }
+
+            // Generate a random alphanumeric password.
+            val chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+            val rnd = java.security.SecureRandom()
+            val generated = (1..14).map { chars[rnd.nextInt(chars.length)] }.joinToString("")
+            val newUser = if (user.isNotEmpty()) user else "admin"
+
+            prefs.edit()
+                .putBoolean("web_auth_enabled", true)
+                .putString("web_auth_username", newUser)
+                .putString("web_auth_password", generated)
+                .apply()
+
+            Log.w(TAG, "Generated remote-access credentials (user=$newUser)")
+            InternalLog.log("Remote access enabled. Login: $newUser / $generated (change this in App settings)")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to ensure remote auth credentials", e)
+            false
         }
     }
 

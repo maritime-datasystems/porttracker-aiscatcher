@@ -55,10 +55,9 @@ object TrustedDocksApi {
 
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                val errorBody = try {
-                    connection.errorStream?.bufferedReader()?.readText() ?: ""
-                } catch (_: Exception) { "" }
-                Log.e(TAG, "station-config returned HTTP $responseCode: $errorBody")
+                // Do not log the response body — an auth-failure response may
+                // echo the supplied API key. Status code is enough to diagnose.
+                Log.e(TAG, "station-config returned HTTP $responseCode")
                 return null
             }
 
