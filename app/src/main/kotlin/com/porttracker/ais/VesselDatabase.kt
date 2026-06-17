@@ -25,8 +25,9 @@ class VesselDatabase private constructor(context: Context) :
     companion object {
         private const val TAG = "porttracker-service.DB"
         private const val DB_NAME = "vessel_cache.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         const val TABLE = "vessel_static"
+        const val POS_TABLE = "vessel_position"
 
         @Volatile private var instance: VesselDatabase? = null
         fun getInstance(context: Context): VesselDatabase =
@@ -61,11 +62,44 @@ class VesselDatabase private constructor(context: Context) :
         )
         db.execSQL("CREATE INDEX idx_vessel_imo ON $TABLE(imo)")
         db.execSQL("CREATE INDEX idx_vessel_name ON $TABLE(name)")
+        createPositionTable(db)
         Log.i(TAG, "Vessel cache DB created (v$DB_VERSION)")
     }
 
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        // WAL: concurrent reads (track/stats APIs) while the writer inserts.
+        db.enableWriteAheadLogging()
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // v1 — nothing to migrate yet. Additive migrations go here later.
+        if (oldVersion < 2) {
+            createPositionTable(db)
+            Log.i(TAG, "Migrated vessel DB to v2 (position history)")
+        }
+    }
+
+    private fun createPositionTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $POS_TABLE (
+                mmsi        INTEGER NOT NULL,
+                ts          INTEGER NOT NULL,
+                lat         REAL NOT NULL,
+                lon         REAL NOT NULL,
+                sog         REAL,
+                cog         REAL,
+                heading     INTEGER,
+                draught     REAL,
+                nav_status  INTEGER,
+                resolution  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (mmsi, ts)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_pos_ts ON $POS_TABLE(ts)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_pos_mmsi_ts ON $POS_TABLE(mmsi, ts)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_pos_res_ts ON $POS_TABLE(resolution, ts)")
     }
 
     /**
@@ -227,7 +261,91 @@ class VesselDatabase private constructor(context: Context) :
     private fun csvField(s: String): String =
         if (s.contains(',') || s.contains('"') || s.contains('\n'))
             "\"" + s.replace("\"", "\"\"") + "\"" else s
+
+    // ---- Position history ----
+
+    /** Batch-insert raw position points. PK (mmsi, ts) collisions are ignored. */
+    fun insertPositions(points: List<PositionRecord>) {
+        if (points.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (p in points) {
+                val cv = ContentValues().apply {
+                    put("mmsi", p.mmsi); put("ts", p.ts)
+                    put("lat", p.lat); put("lon", p.lon)
+                    p.sog?.let { put("sog", it) }
+                    p.cog?.let { put("cog", it) }
+                    p.heading?.let { put("heading", it) }
+                    p.draught?.let { put("draught", it) }
+                    p.navStatus?.let { put("nav_status", it) }
+                    put("resolution", 0)
+                }
+                db.insertWithOnConflict(POS_TABLE, null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            db.setTransactionSuccessful()
+        } catch (e: Exception) {
+            Log.e(TAG, "insertPositions failed", e)
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Row counts per resolution + total + time span, for the stats endpoint. */
+    fun positionStats(): JSONObject {
+        val o = JSONObject()
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*), MIN(ts), MAX(ts), " +
+                "SUM(resolution=0), SUM(resolution=1), SUM(resolution=2) FROM $POS_TABLE", null
+        ).use { c ->
+            if (c.moveToFirst()) {
+                o.put("total", c.getLong(0))
+                o.put("oldest_ts", if (c.isNull(1)) JSONObject.NULL else c.getLong(1))
+                o.put("newest_ts", if (c.isNull(2)) JSONObject.NULL else c.getLong(2))
+                o.put("raw", c.getLong(3))
+                o.put("hourly", c.getLong(4))
+                o.put("daily", c.getLong(5))
+            }
+        }
+        o.put("distinct_vessels", run {
+            readableDatabase.rawQuery("SELECT COUNT(DISTINCT mmsi) FROM $POS_TABLE", null).use {
+                if (it.moveToFirst()) it.getLong(0) else 0L
+            }
+        })
+        return o
+    }
+
+    /** Track points for one vessel, oldest→newest, optionally filtered by time/resolution. */
+    fun queryTrack(mmsi: Long, from: Long?, to: Long?, res: Int?, limit: Int): JSONArray {
+        val where = StringBuilder("mmsi = ?")
+        val args = ArrayList<String>(); args.add(mmsi.toString())
+        if (from != null) { where.append(" AND ts >= ?"); args.add(from.toString()) }
+        if (to != null) { where.append(" AND ts <= ?"); args.add(to.toString()) }
+        if (res != null) { where.append(" AND resolution = ?"); args.add(res.toString()) }
+        val sql = "SELECT ts,lat,lon,sog,cog,heading,draught,nav_status,resolution FROM $POS_TABLE " +
+            "WHERE $where ORDER BY ts ASC LIMIT ?"
+        args.add(limit.toString())
+
+        val out = JSONArray()
+        readableDatabase.rawQuery(sql, args.toTypedArray()).use { c ->
+            while (c.moveToNext()) out.put(rowToJson(c))
+        }
+        return out
+    }
 }
+
+/** A single dynamic position report to persist. */
+data class PositionRecord(
+    val mmsi: Long,
+    val ts: Long,
+    val lat: Double,
+    val lon: Double,
+    val sog: Double? = null,
+    val cog: Double? = null,
+    val heading: Int? = null,
+    val draught: Double? = null,
+    val navStatus: Int? = null
+)
 
 /** Static fields parsed from a decoded vessel; nulls mean "not known from this source". */
 data class VesselRecord(

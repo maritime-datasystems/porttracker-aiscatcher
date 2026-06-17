@@ -664,7 +664,15 @@ var SettingsRenderer = {
                 <label class="form-check-label" for="internal_db_enabled"><strong>Write to Internal Database</strong></label>
             </div>
             <div class="alert alert-secondary">
-                <i class="bi bi-info-circle"></i> When enabled, all received AIS messages will be stored in a local SQLite database on the device. This can be useful for offline analysis or data export.
+                <i class="bi bi-info-circle"></i> When enabled, static vessel data (name, IMO, callsign, type, dimensions) is stored in a local SQLite database for fast identification and export.
+            </div>
+
+            <div class="mb-3 form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="position_logging_enabled" ${this.bool('position_logging_enabled') ? 'checked' : ''}>
+                <label class="form-check-label" for="position_logging_enabled"><strong>Log vessel positions (track history)</strong></label>
+            </div>
+            <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle"></i> Stores each vessel's position/speed/course over time (movement-based, kept 3 months then downsampled). Uses significantly more storage — leave off unless you need track history. Requires the internal database to be enabled.
             </div>
         `;
     },
@@ -749,6 +757,7 @@ var SettingsRenderer = {
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');
+        collect('position_logging_enabled', 'bool');
 
         // Collect App settings
         collect('auto_start_boot', 'bool');

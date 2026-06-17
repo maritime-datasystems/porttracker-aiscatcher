@@ -250,6 +250,28 @@ class AdminWebServer(
         if (session.method == Method.GET && session.uri == "/admin/api/vessels.csv") {
             return handleVesselCsv()
         }
+        if (session.method == Method.GET && session.uri == "/admin/api/positions/stats") {
+            val stats = VesselDatabase.getInstance(service).positionStats()
+            stats.put("logging_enabled", androidx.preference.PreferenceManager
+                .getDefaultSharedPreferences(service).all["position_logging_enabled"]
+                .let { it == true || it == "true" })
+            stats.put("positions_stored_session", VesselCacheWriter.positionsStored)
+            return newFixedLengthResponse(Response.Status.OK, "application/json", stats.toString())
+        }
+        if (session.method == Method.GET && session.uri == "/admin/api/vessel/track") {
+            val p = parseQuery(session.queryParameterString)
+            val mmsi = p["mmsi"]?.toLongOrNull()
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json", """{"error":"mmsi required"}""")
+            val track = VesselDatabase.getInstance(service).queryTrack(
+                mmsi,
+                p["from"]?.toLongOrNull(),
+                p["to"]?.toLongOrNull(),
+                p["res"]?.toIntOrNull(),
+                (p["limit"]?.toIntOrNull() ?: 5000).coerceIn(1, 20000)
+            )
+            val out = JSONObject().apply { put("mmsi", mmsi); put("points", track) }
+            return newFixedLengthResponse(Response.Status.OK, "application/json", out.toString())
+        }
 
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Admin Endpoint Not Found")
     }

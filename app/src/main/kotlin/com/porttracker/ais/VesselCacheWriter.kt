@@ -25,6 +25,13 @@ class VesselCacheWriter(
         private const val TAG = "porttracker-service.DBWriter"
         private const val POLL_INTERVAL_SEC = 30L
 
+        // Movement-based position-ingestion thresholds. Store a point when the
+        // vessel moved far enough, turned enough, or a heartbeat elapsed — so
+        // moored vessels don't fill the DB with identical points.
+        private const val MOVE_THRESHOLD_M = 50.0
+        private const val HEARTBEAT_MS = 300_000L   // 5 min
+        private const val TURN_DEG = 15.0
+
         // Status surface for the UI / health endpoint.
         @Volatile var isRunning = false
             private set
@@ -34,7 +41,13 @@ class VesselCacheWriter(
             private set
         @Volatile var totalUpserts = 0L
             private set
+        @Volatile var positionsStored = 0L
+            private set
     }
+
+    /** Last stored track point per vessel (writer-thread only). */
+    private data class LastPoint(val ts: Long, val lat: Double, val lon: Double, val cog: Double?)
+    private val lastStored = HashMap<Long, LastPoint>()
 
     private val appContext = context.applicationContext
     private val db = VesselDatabase.getInstance(appContext)
@@ -71,7 +84,16 @@ class VesselCacheWriter(
         val root = JSONObject(body)
         val ships = root.optJSONArray("ships") ?: return
 
+        // Tolerant read: the web config-save path may persist a new flag as a
+        // String, so accept both Boolean true and "true".
+        val posLogging = androidx.preference.PreferenceManager
+            .getDefaultSharedPreferences(appContext).all["position_logging_enabled"]
+            .let { it == true || it == "true" }
+        val now = System.currentTimeMillis()
+
         val records = ArrayList<VesselRecord>(ships.length())
+        val positions = if (posLogging) ArrayList<PositionRecord>() else null
+
         for (i in 0 until ships.length()) {
             val s = ships.optJSONObject(i) ?: continue
             val mmsi = s.optLong("mmsi", 0L)
@@ -93,13 +115,72 @@ class VesselCacheWriter(
                     country = s.optString("country", "").cleaned()
                 )
             )
+            if (positions != null) maybeAddPosition(positions, s, mmsi, now)
         }
 
-        db.upsertAll(records, System.currentTimeMillis())
-        lastPollMs = System.currentTimeMillis()
+        db.upsertAll(records, now)
+        if (positions != null && positions.isNotEmpty()) {
+            db.insertPositions(positions)
+            positionsStored += positions.size
+        }
+        // Bound the in-memory dedup map over very long runs.
+        if (lastStored.size > 10_000) lastStored.clear()
+
+        lastPollMs = now
         lastPollVessels = records.size
         totalUpserts += records.size
-        Log.d(TAG, "polled ${records.size} vessels; db now has ${db.count()} rows")
+        Log.d(TAG, "polled ${records.size} vessels" +
+            (if (positions != null) "; +${positions.size} positions" else "") +
+            "; static rows=${db.count()}")
+    }
+
+    /** Apply the movement/heartbeat rule and append a point if it should be stored. */
+    private fun maybeAddPosition(out: MutableList<PositionRecord>, s: JSONObject, mmsi: Long, now: Long) {
+        val lat = s.optDouble("lat", Double.NaN)
+        val lon = s.optDouble("lon", Double.NaN)
+        if (lat.isNaN() || lon.isNaN() || (lat == 0.0 && lon == 0.0) ||
+            Math.abs(lat) > 90.0 || Math.abs(lon) > 180.0) return
+
+        val cog = s.optDouble("cog", Double.NaN).let { if (it.isNaN() || it >= 360.0) null else it }
+        val last = lastStored[mmsi]
+        val store = when {
+            last == null -> true
+            now - last.ts >= HEARTBEAT_MS -> true
+            haversineMeters(last.lat, last.lon, lat, lon) >= MOVE_THRESHOLD_M -> true
+            cog != null && last.cog != null && angleDiff(cog, last.cog) >= TURN_DEG -> true
+            else -> false
+        }
+        if (!store) return
+
+        out.add(
+            PositionRecord(
+                mmsi = mmsi,
+                ts = now,
+                lat = lat,
+                lon = lon,
+                sog = s.optDouble("speed", Double.NaN).let { if (it.isNaN()) null else it },
+                cog = cog,
+                heading = s.optInt("heading", 511).takeIf { it in 0..359 },
+                draught = s.optDouble("draught", 0.0).takeIf { it > 0.0 },
+                navStatus = s.optInt("status", -1).takeIf { it in 0..15 }
+            )
+        )
+        lastStored[mmsi] = LastPoint(now, lat, lon, cog)
+    }
+
+    private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    }
+
+    private fun angleDiff(a: Double, b: Double): Double {
+        val d = Math.abs(a - b) % 360.0
+        return if (d > 180.0) 360.0 - d else d
     }
 
     private fun fetch(urlStr: String): String {
