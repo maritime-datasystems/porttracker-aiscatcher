@@ -9,14 +9,14 @@
 
         <EditTextPreference
             android:key="pref_porttracker_username"
-            android:title="Porttracker Username"
-            android:summary="Enter your Porttracker username"
+            android:title="TrustedDocks Username"
+            android:summary="Enter your TrustedDocks username"
             android:defaultValue=""
             app:iconSpaceReserved="false" />
 
         <EditTextPreference
             android:key="pref_station_name"
-            android:title="Porttracker AIS Station Name"
+            android:title="TrustedDocks AIS Station Name"
             android:summary="Enter a name for your station"
             android:defaultValue=""
             app:iconSpaceReserved="false" />
@@ -77,7 +77,7 @@
             android:key="web_auth_enabled"
             android:title="Require Password"
             android:summary="Protect web interface with username/password"
-            android:defaultValue="true"
+            android:defaultValue="false"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference

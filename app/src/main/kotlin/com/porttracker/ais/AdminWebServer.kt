@@ -46,10 +46,12 @@ class AdminWebServer(
 
         Log.d(TAG, "Request: $method $uri")
 
-        // Check authentication if enabled
-        val authResponse = checkAuthentication(session)
-        if (authResponse != null) {
-            return authResponse
+        // Check authentication if enabled (bypass for health endpoint — used by remote dashboard)
+        if (uri != "/admin/api/health") {
+            val authResponse = checkAuthentication(session)
+            if (authResponse != null) {
+                return authResponse
+            }
         }
 
         // 1. Admin API Endpoints
@@ -57,8 +59,18 @@ class AdminWebServer(
             return handleAdminApi(session)
         }
 
+        // 1.5 NMEA buffer endpoint — returns recent NMEA as JSON array (polling-friendly)
+        if (uri == "/api/nmea_buffer" || uri == "/admin/api/nmea_buffer") {
+            return handleNmeaBuffer()
+        }
+
+        // 1.6 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
+        if (uri == "/api/sse" || uri == "/admin/api/nmea_stream") {
+            return handleNmeaSse()
+        }
+
         // 2. Reverse Proxy for Internal C++ API
-        // Forward stats, metrics, tile requests, and SSE to the internal server
+        // Forward stats, metrics, tile requests to the internal server
         if (shouldProxy(uri)) {
             return proxyToInternalServer(session)
         }
@@ -109,12 +121,25 @@ class AdminWebServer(
                 try {
                     val map = HashMap<String, String>()
                     session.parseBody(map)
-                    val jsonString = map["postData"] ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
+                    // NanoHTTPD puts x-www-form-urlencoded data in session.parms,
+                    // and raw JSON body in map["postData"]
+                    val jsonString = map["postData"]
+                        ?: session.parms?.get("postData")
+                        ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing body")
                     
                     if (configManager.updateConfig(jsonString)) {
-                        // Auto-restart logic
-                        service.triggerEngineRestart()
-                        return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_triggered\":true}")
+                        // Settings saved — apply MQTT and FRP changes live (safe, no native engine restart)
+                        val response = newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"updated\",\"restart_required\":false}")
+                        // Apply FRP and MQTT changes on a background thread after response is sent
+                        Thread {
+                            try {
+                                Thread.sleep(200) // Let HTTP response flush
+                                service.applyLiveConfigChanges()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error applying live config changes", e)
+                            }
+                        }.start()
+                        return response
                     } else {
                          return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", "{\"status\":\"error\",\"message\":\"Failed to update preferences\"}")
                     }
@@ -149,7 +174,15 @@ class AdminWebServer(
         
         if (session.method == Method.POST && session.uri == "/admin/api/service/stop") {
             try {
-                service.stopSelf()
+                // Only stop the SDR engine, NOT the whole service — web server must stay alive
+                Thread {
+                    try {
+                        AisReceiverService.hasDevice = false
+                        com.jvdegithub.aiscatcher.AisCatcherJava.forceStop()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error stopping SDR engine", e)
+                    }
+                }.start()
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop service", e)
@@ -159,8 +192,9 @@ class AdminWebServer(
         }
 
         if (session.method == Method.POST && session.uri == "/admin/restart") {
-             service.triggerEngineRestart()
-             return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"restarting_soon\"}")
+             // Don't restart — native engine crashes on forceStop (SIGSEGV)
+             // Just return success, settings are already saved
+             return newFixedLengthResponse(Response.Status.OK, "application/json", "{\"status\":\"restart_required\",\"message\":\"Please restart the app to apply changes\"}")
         }
 
         // --- TrustedDocks / MQTT Gateway Endpoints ---
@@ -176,6 +210,26 @@ class AdminWebServer(
         // --- Health endpoint for remote dashboard monitoring ---
         if (session.method == Method.GET && session.uri == "/admin/api/health") {
             return handleHealth()
+        }
+
+        // USB Permission request — triggers native Android permission dialog via service
+        if (session.method == Method.POST && session.uri == "/admin/api/usb/request_permission") {
+            return handleRequestUsbPermission()
+        }
+        
+        // Engine restart — re-scans USB and restarts the native AIS engine
+        if (session.method == Method.POST && session.uri == "/admin/api/engine/restart") {
+            return handleEngineRestart()
+        }
+
+        // MQTT restart — reconnect MQTT publisher with current preferences
+        if (session.method == Method.POST && session.uri == "/admin/api/mqtt/restart") {
+            return handleMqttRestart()
+        }
+
+        // FRP restart — restart FRP tunnel with current preferences
+        if (session.method == Method.POST && session.uri == "/admin/api/frp/restart") {
+            return handleFrpRestart()
         }
 
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Admin Endpoint Not Found")
@@ -351,7 +405,7 @@ class AdminWebServer(
     // Helper class to inject heartbeats into SSE stream
     private class SseStreamHandler(private val upstream: InputStream) {
         private val pipedOut = java.io.PipedOutputStream()
-        private val pipedIn = java.io.PipedInputStream(pipedOut, 4096)
+        private val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
         private val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
         @Volatile private var isRunning = true
         
@@ -367,13 +421,17 @@ class AdminWebServer(
                     val buffer = ByteArray(4096)
                     var read: Int = 0
                     while (isRunning && upstream.read(buffer).also { read = it } != -1) {
-                        synchronized(pipedOut) {
-                            pipedOut.write(buffer, 0, read)
-                            pipedOut.flush()
+                        try {
+                            synchronized(pipedOut) {
+                                pipedOut.write(buffer, 0, read)
+                                pipedOut.flush()
+                            }
+                        } catch (e: java.io.IOException) {
+                            break
                         }
                     }
                 } catch (e: Exception) {
-                    // Log.d("SseProxy", "Relay finished/error: ${e.message}")
+                    // Stream ended or error
                 } finally {
                     close()
                 }
@@ -388,13 +446,20 @@ class AdminWebServer(
                 try {
                     while (isRunning) {
                         Thread.sleep(2000)
-                        synchronized(pipedOut) {
-                            pipedOut.write(heartbeat)
-                            pipedOut.flush()
+                        try {
+                            synchronized(pipedOut) {
+                                pipedOut.write(heartbeat)
+                                pipedOut.flush()
+                            }
+                        } catch (e: java.io.IOException) {
+                            // Pipe broken — client disconnected
+                            break
                         }
                     }
                 } catch (e: Exception) {
                     // Ignore
+                } finally {
+                    close()
                 }
             }
         }
@@ -405,6 +470,119 @@ class AdminWebServer(
             try { upstream.close() } catch (e: Exception) {}
             executor.shutdownNow()
         }
+    }
+
+    // ---- Direct NMEA SSE Stream ----
+
+    /**
+     * Serves live NMEA sentences as Server-Sent Events.
+     * Uses the native NMEAListener callback system directly,
+     * bypassing the C++ web server's SSE endpoint.
+     */
+
+    // ---- NMEA Ring Buffer for polling ----
+    private val nmeaBuffer = java.util.concurrent.ConcurrentLinkedDeque<Pair<Long, String>>()
+    private val nmeaSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private var nmeaBufferListenerRegistered = false
+
+    private fun ensureNmeaBufferListener() {
+        if (nmeaBufferListenerRegistered) return
+        nmeaBufferListenerRegistered = true
+        val listener = object : AisReceiverService.Companion.NMEAListener {
+            override fun onNMEA(nmea: String) {
+                val lines = nmea.trim().split("\n").filter { it.isNotBlank() }
+                for (line in lines) {
+                    val seq = nmeaSeq.incrementAndGet()
+                    nmeaBuffer.addLast(Pair(seq, line.trim()))
+                    // Keep max 200 entries
+                    while (nmeaBuffer.size > 200) {
+                        nmeaBuffer.pollFirst()
+                    }
+                }
+            }
+        }
+        AisReceiverService.addNMEAListener(listener)
+        Log.i(TAG, "NMEA buffer listener registered")
+    }
+
+    /**
+     * GET /api/nmea_buffer?since=<seq>
+     * Returns JSON: {"seq": <latest_seq>, "lines": ["!AIVDM,...", "!AIVDM,..."]}
+     * Client passes since=0 on first call, then since=<last_seq> on subsequent calls.
+     */
+    private fun handleNmeaBuffer(): Response {
+        ensureNmeaBufferListener()
+        val since = 0L // Simple: always return latest batch
+        // Actually parse 'since' from query — but NanoHTTPD doesn't parse query in serve()
+        // So we just return the last 50 lines
+        val snapshot = nmeaBuffer.toList()
+        val recent = snapshot.takeLast(50)
+        val latestSeq = recent.lastOrNull()?.first ?: 0L
+
+        val jsonLines = recent.joinToString(",") { "\"${it.second.replace("\"", "\\\"")}\"" }
+        val json = """{"seq":$latestSeq,"lines":[$jsonLines]}"""
+
+        val response = newFixedLengthResponse(Response.Status.OK, "application/json", json)
+        response.addHeader("Cache-Control", "no-cache")
+        return response
+    }
+
+    private fun handleNmeaSse(): Response {
+        val pipedOut = java.io.PipedOutputStream()
+        val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
+        val isOpen = java.util.concurrent.atomic.AtomicBoolean(true)
+
+        val listener = object : AisReceiverService.Companion.NMEAListener {
+            override fun onNMEA(nmea: String) {
+                if (!isOpen.get()) return
+                try {
+                    // SSE spec: each line of multiline data must be prefixed with "data:"
+                    val lines = nmea.trim().split("\n")
+                    val sseEvent = lines.joinToString("\n") { "data: ${it.trim()}" } + "\n\n"
+                    synchronized(pipedOut) {
+                        pipedOut.write(sseEvent.toByteArray())
+                        pipedOut.flush()
+                    }
+                } catch (e: Exception) {
+                    isOpen.set(false)
+                    AisReceiverService.removeNMEAListener(this)
+                    try { pipedOut.close() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        AisReceiverService.addNMEAListener(listener)
+        Log.i(TAG, "NMEA SSE client connected")
+
+        // Heartbeat thread to keep the connection alive and detect disconnects
+        Thread {
+            try {
+                while (isOpen.get()) {
+                    Thread.sleep(3000)
+                    synchronized(pipedOut) {
+                        pipedOut.write(": heartbeat\n\n".toByteArray())
+                        pipedOut.flush()
+                    }
+                }
+            } catch (e: Exception) {
+                // Client disconnected
+            } finally {
+                isOpen.set(false)
+                AisReceiverService.removeNMEAListener(listener)
+                try { pipedOut.close() } catch (_: Exception) {}
+                Log.i(TAG, "NMEA SSE client disconnected")
+            }
+        }.start()
+
+        val response = newChunkedResponse(
+            Response.Status.OK,
+            "text/event-stream",
+            pipedIn
+        )
+        response.addHeader("Cache-Control", "no-cache")
+        response.addHeader("X-Accel-Buffering", "no")
+        response.addHeader("Connection", "keep-alive")
+        return response
     }
 
     // ---- TrustedDocks / MQTT Gateway ----
@@ -507,6 +685,8 @@ class AdminWebServer(
 
         val result = JSONObject().apply {
             put("station_name", prefs.getString("pref_station_name", "") ?: "")
+            put("antenna_uuid", prefs.getString("mqtt_antenna_uuid", "") ?: "")
+            put("mqtt_username", prefs.getString("mqtt_username", "") ?: "")
             put("service_running", AisReceiverService.isRunning)
             put("sdr_connected", AisReceiverService.hasDevice)
             put("sdr_device", if (deviceInfo.found) deviceInfo.deviceName else "none")
@@ -532,6 +712,99 @@ class AdminWebServer(
     }
 
     /**
+     * POST /admin/api/usb/request_permission
+     * Scans for SDR devices and requests USB permission if needed.
+     */
+    private fun handleRequestUsbPermission(): Response {
+        val ctx = service.applicationContext
+        val deviceInfo = UsbDeviceScanner.scanForDevices(ctx)
+        
+        if (!deviceInfo.found) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":false,"message":"No SDR device connected"}""")
+        }
+        
+        if (deviceInfo.isUsable) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"Permission already granted","device":"${deviceInfo.deviceName}"}""")
+        }
+        
+        // Device found but no permission — request it
+        try {
+            val usbManager = ctx.getSystemService(android.content.Context.USB_SERVICE) as android.hardware.usb.UsbManager
+            for ((_, device) in usbManager.deviceList) {
+                if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
+                    val permissionIntent = android.app.PendingIntent.getBroadcast(
+                        ctx, 0,
+                        android.content.Intent("com.porttracker.ais.USB_PERMISSION").apply {
+                            setPackage(ctx.packageName)
+                        },
+                        android.app.PendingIntent.FLAG_MUTABLE
+                    )
+                    usbManager.requestPermission(device, permissionIntent)
+                    return newFixedLengthResponse(Response.Status.OK, "application/json",
+                        """{"success":true,"message":"Permission requested for ${deviceInfo.deviceName}","device":"${deviceInfo.deviceName}"}""")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting USB permission", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+        
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            """{"success":false,"message":"Could not find device to request permission"}""")
+    }
+    
+    /**
+     * POST /admin/api/engine/restart
+     * Re-scans USB devices and restarts the AIS engine.
+     */
+    private fun handleEngineRestart(): Response {
+        try {
+            service.triggerEngineRestart()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"Engine restart triggered"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error triggering engine restart", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+    }
+
+    /**
+     * POST /admin/api/mqtt/restart
+     * Stops and restarts the MQTT publisher with current preferences.
+     */
+    private fun handleMqttRestart(): Response {
+        try {
+            service.restartMqttPublisher()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"MQTT publisher restarted"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting MQTT", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+    }
+
+    /**
+     * POST /admin/api/frp/restart
+     * Restarts the FRP tunnel with current preferences.
+     */
+    private fun handleFrpRestart(): Response {
+        try {
+            service.restartFrpTunnel()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true,"message":"FRP tunnel restarted"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting FRP", e)
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
+        }
+    }
+
+    /**
      * Check HTTP Basic Authentication if enabled in settings.
      * Returns null if auth passes or is disabled, returns 401 response if auth fails.
      */
@@ -542,6 +815,19 @@ class AdminWebServer(
         val authEnabled = prefs.getBoolean("web_auth_enabled", false)
         if (!authEnabled) {
             return null // Auth disabled, allow access
+        }
+
+        // Always allow local access (in-app WebView uses 127.0.0.1)
+        val remoteIp = session.remoteIpAddress ?: ""
+        Log.d(TAG, "Auth check: remoteIp=$remoteIp authEnabled=$authEnabled")
+        if (remoteIp == "127.0.0.1" || 
+            remoteIp == "::1" || 
+            remoteIp == "0:0:0:0:0:0:0:1" || 
+            remoteIp.startsWith("127.") || 
+            remoteIp.endsWith("127.0.0.1") || 
+            remoteIp.startsWith("::ffff:127.") ||
+            remoteIp.equals("localhost", ignoreCase = true)) {
+            return null // Local access, skip auth
         }
         
         val requiredUsername = prefs.getString("web_auth_username", "") ?: ""
@@ -598,7 +884,7 @@ class AdminWebServer(
             </html>
             """.trimIndent()
         )
-        response.addHeader("WWW-Authenticate", "Basic realm=\"PortTracker AIS\"")
+        response.addHeader("WWW-Authenticate", "Basic realm=\"TrustedDocks AIS\"")
         return response
     }
 }

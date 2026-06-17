@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.net.wifi.WifiManager
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -60,7 +61,7 @@ class AisReceiverService : Service() {
             private set
         
         @Volatile var hasDevice = false
-            private set
+            internal set
         
         // Message counter for UI display
         private val _messageCount = java.util.concurrent.atomic.AtomicInteger(0)
@@ -76,6 +77,7 @@ class AisReceiverService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var receiverThread: Thread? = null
     private val shouldStop = AtomicBoolean(false)
     private val restartRequested = AtomicBoolean(false)
@@ -87,6 +89,8 @@ class AisReceiverService : Service() {
     private var mqttPublisher: MqttPublisher? = null
     private var mqttNmeaListener: NMEAListener? = null
     private val startLock = Object()  // Prevent concurrent starts
+    // Dynamic USB receiver for detecting SDR plug/unplug while service is running
+    private var usbReceiver: android.content.BroadcastReceiver? = null
     
     private val INTERNAL_WEB_PORT = 8888
 
@@ -94,6 +98,8 @@ class AisReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
         extractWebAssets()
+        // Register for USB attach/detach events
+        registerUsbReceiver()
     }
     
     private fun extractWebAssets() {
@@ -105,28 +111,57 @@ class AisReceiverService : Service() {
             return  // Assets already extracted for this version
         }
 
-        if (!webDir.exists()) webDir.mkdirs()
-        val assetManager = assets
-        val files = assetManager.list("web") ?: return
-        for (filename in files) {
-            try {
-                assetManager.open("web/$filename").use { inStream ->
-                    java.io.FileOutputStream(java.io.File(webDir, filename)).use { outStream ->
-                        inStream.copyTo(outStream)
+        extractAssetDir("web", webDir)
+        versionFile.writeText(currentVersion ?: "")
+        Log.i(TAG, "Web assets extracted for version $currentVersion")
+    }
+
+    private fun extractAssetDir(assetPath: String, targetDir: java.io.File) {
+        if (!targetDir.exists()) targetDir.mkdirs()
+        val entries = assets.list(assetPath) ?: return
+        for (entry in entries) {
+            val fullAssetPath = "$assetPath/$entry"
+            val targetFile = java.io.File(targetDir, entry)
+            val subEntries = assets.list(fullAssetPath)
+            if (subEntries != null && subEntries.isNotEmpty()) {
+                // It's a directory — recurse
+                extractAssetDir(fullAssetPath, targetFile)
+            } else {
+                // It's a file — copy
+                try {
+                    assets.open(fullAssetPath).use { inStream ->
+                        java.io.FileOutputStream(targetFile).use { outStream ->
+                            inStream.copyTo(outStream)
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to extract $fullAssetPath", e)
                 }
-                Log.i(TAG, "Extracted web asset: $filename")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to extract $filename", e)
             }
         }
-        versionFile.writeText(currentVersion ?: "")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         synchronized(startLock) {
-            // Prevent double-start
+            // Check if service is already running
             if (isRunning && receiverThread?.isAlive == true) {
+                // If we're in web-only mode and a USB device is now available, trigger engine restart
+                val newVid = intent?.getIntExtra("USB_VENDOR_ID", -1) ?: -1
+                val newPid = intent?.getIntExtra("USB_PRODUCT_ID", -1) ?: -1
+                if (!hasDevice && newVid > 0 && newPid > 0) {
+                    Log.i(TAG, "USB device available while in web-only mode (vid=$newVid, pid=$newPid) — triggering restart")
+                    val newFd = openUsbDevice(newVid, newPid)
+                    if (newFd >= 0) {
+                        fileDescriptor = newFd
+                        currentSource = intent?.getIntExtra("SOURCE", currentSource) ?: currentSource
+                        restartRequested.set(true)
+                        shouldStop.set(true)
+                        receiverThread?.interrupt()  // Break out of keep-alive sleep loop
+                    } else {
+                        Log.w(TAG, "USB device found but could not open (permission issue?)")
+                    }
+                    return START_NOT_STICKY
+                }
                 Log.w(TAG, "Service already running, ignoring start command")
                 return START_NOT_STICKY
             }
@@ -202,7 +237,7 @@ class AisReceiverService : Service() {
         }
         
         // Start MQTT publishing if enabled and configured
-        if (config.mqttEnabled && config.mqttTopicJson.isNotEmpty()) {
+        if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
             startMqttPublisher()
         }
         
@@ -259,14 +294,134 @@ class AisReceiverService : Service() {
         }
     }
 
+    /**
+     * Re-scan USB devices and open the SDR file descriptor.
+     * Used when restarting the engine after the SDR was plugged in post-launch.
+     */
+    private fun rescanAndOpenUsb(): Int {
+        val deviceInfo = UsbDeviceScanner.scanForDevices(this)
+        if (deviceInfo.found && deviceInfo.isUsable) {
+            Log.i(TAG, "rescanAndOpenUsb: Found SDR vendor=${deviceInfo.vendorId}, product=${deviceInfo.productId}")
+            val fd = openUsbDevice(deviceInfo.vendorId, deviceInfo.productId)
+            fileDescriptor = fd
+            return fd
+        }
+        Log.w(TAG, "rescanAndOpenUsb: No usable SDR device found")
+        return -1
+    }
+
+    /**
+     * Register a dynamic BroadcastReceiver for USB attach/detach events.
+     * This allows the service to detect when an SDR device is plugged in
+     * after the service has already started in web-only mode.
+     */
+    private fun registerUsbReceiver() {
+        usbReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+                when (intent.action) {
+                    android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE, android.hardware.usb.UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE)
+                        }
+                        device?.let {
+                            if (SupportedDevices.isSupportedDevice(it.vendorId, it.productId)) {
+                                Log.i(TAG, "SDR device attached while service running: ${it.productName} (${it.vendorId}:${it.productId})")
+                                if (!hasDevice) {
+                                    val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
+                                    if (usbManager.hasPermission(it)) {
+                                        Log.i(TAG, "Device has permission, restarting engine...")
+                                        val fd = openUsbDevice(it.vendorId, it.productId)
+                                        if (fd >= 0) {
+                                            fileDescriptor = fd
+                                            restartRequested.set(true)
+                                            shouldStop.set(true)
+                                            receiverThread?.interrupt()
+                                        }
+                                    } else {
+                                        Log.i(TAG, "Device needs permission — requesting...")
+                                        val permIntent = android.app.PendingIntent.getBroadcast(
+                                            this@AisReceiverService, 0,
+                                            android.content.Intent("com.porttracker.ais.USB_PERMISSION").apply {
+                                                setPackage(packageName)
+                                            },
+                                            android.app.PendingIntent.FLAG_MUTABLE
+                                        )
+                                        usbManager.requestPermission(it, permIntent)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE, android.hardware.usb.UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE)
+                        }
+                        device?.let {
+                            if (SupportedDevices.isSupportedDevice(it.vendorId, it.productId)) {
+                                Log.w(TAG, "SDR device detached: ${it.productName}")
+                                hasDevice = false
+                            }
+                        }
+                    }
+                    "com.porttracker.ais.USB_PERMISSION" -> {
+                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE, android.hardware.usb.UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE)
+                        }
+                        val granted = intent.getBooleanExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        if (granted && device != null) {
+                            Log.i(TAG, "USB permission granted in service for ${device.productName}")
+                            if (!hasDevice) {
+                                val fd = openUsbDevice(device.vendorId, device.productId)
+                                if (fd >= 0) {
+                                    fileDescriptor = fd
+                                    restartRequested.set(true)
+                                    shouldStop.set(true)
+                                    receiverThread?.interrupt()
+                                }
+                            }
+                        } else {
+                            Log.w(TAG, "USB permission denied in service")
+                        }
+                    }
+                }
+            }
+        }
+        
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction("com.porttracker.ais.USB_PERMISSION")
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbReceiver, filter)
+        }
+        Log.i(TAG, "USB attach/detach receiver registered")
+    }
+
     fun triggerEngineRestart() {
         Log.i(TAG, "Triggering engine restart via Admin API...")
         restartRequested.set(true)
-        try {
-            AisCatcherJava.forceStop()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error forcing stop for restart", e)
-        }
+        // Run on background thread to avoid blocking the HTTP response
+        // and give native engine time to wind down before Close() is called
+        Thread {
+            try {
+                Thread.sleep(500) // Let HTTP response flush first
+                AisCatcherJava.forceStop()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error forcing stop for restart", e)
+            }
+        }.start()
     }
 
     private fun runServiceLoop(config: ServiceConfig) {
@@ -302,21 +457,46 @@ class AisReceiverService : Service() {
             }
             
             // Engine exited - decide what to do
+            if (restartRequested.get()) {
+                Log.i(TAG, "Engine restart requested — restarting in-process")
+                Thread.sleep(2000)
+                shouldStop.set(false)
+                val newConfig = ServiceConfig.fromPreferences(this)
+                restartRequested.set(false)
+                // Use existing fd if set by USB receiver, otherwise re-scan
+                val newFd = if (fileDescriptor >= 0) fileDescriptor else rescanAndOpenUsb()
+                Log.i(TAG, "Re-running engine with updated config... (fd=$newFd)")
+                runNativeEngine(newConfig, currentSource, newFd)
+            }
+            
             if (shouldStop.get()) {
                 Log.i(TAG, "Service loop exiting (stopped by user)")
                 return
             }
             
-            if (restartRequested.get()) {
-                Log.i(TAG, "Engine restart requested (config change)")
-                scheduleServiceRestart(2000)
-                return
-            }
-            
             // Unexpected exit (USB disconnect, crash, etc.)
-            // Schedule a full service restart in a new process
-            Log.w(TAG, "Engine exited unexpectedly. Scheduling service restart in 5s...")
-            scheduleServiceRestart(5000)
+            if (!shouldStop.get() && !restartRequested.get()) {
+                Log.w(TAG, "Engine exited unexpectedly. Entering web-only keep-alive...")
+                updateNotification("SDR disconnected — Web server running")
+                // Stay alive for web server instead of killing the process
+                while (!shouldStop.get() && !restartRequested.get()) {
+                    try {
+                        Thread.sleep(1000)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                }
+                if (restartRequested.get()) {
+                    Log.i(TAG, "Restart requested during keep-alive, re-scanning USB and re-running engine...")
+                    Thread.sleep(1000)
+                    shouldStop.set(false)
+                    val newConfig = ServiceConfig.fromPreferences(this)
+                    restartRequested.set(false)
+                    val newFd = if (fileDescriptor >= 0) fileDescriptor else rescanAndOpenUsb()
+                    Log.i(TAG, "Re-running engine with fd=$newFd")
+                    runNativeEngine(newConfig, currentSource, newFd)
+                }
+            }
             
         } finally {
             isRunning = false
@@ -534,6 +714,14 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error closing USB connection", e)
         }
         
+        // Unregister USB receiver
+        try {
+            usbReceiver?.let { unregisterReceiver(it) }
+            usbReceiver = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unregistering USB receiver", e)
+        }
+
         releaseWakeLock()
         isRunning = false
         hasDevice = false
@@ -544,49 +732,14 @@ class AisReceiverService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun loadConfig(): ServiceConfig {
-        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
-        
-        // Load UDP outputs
-        val udpOutputs = (1..4).map { i ->
-            UdpOutput(
-                enabled = prefs.getBoolean("udp${i}_enabled", false),
-                host = prefs.getString("udp${i}_host", "127.0.0.1") ?: "127.0.0.1",
-                port = prefs.getString("udp${i}_port", (10109 + i).toString())?.toIntOrNull() ?: (10109 + i),
-                json = prefs.getBoolean("udp${i}_json", false)
-            )
-        }
-        
-        return ServiceConfig(
-            deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
-            udpOutputs = udpOutputs,
-            tcpEnabled = prefs.getBoolean("tcp_enabled", false),
-            tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
-            webViewerEnabled = prefs.getBoolean("webviewer_enabled", false),
-            webViewerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
-            gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
-            gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
-            gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
-            gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
-            hubEnabled = prefs.getBoolean("hub_sharing", false),
-            hubKey = prefs.getString("hub_key", "") ?: "",
-            remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
-            stationName = prefs.getString("pref_station_name", "") ?: "",
-            mqttEnabled = prefs.getBoolean("mqtt_enabled", false),
-            mqttBrokerUrl = prefs.getString("mqtt_broker_url", "ssl://mqtt.navisense.de:8883") ?: "ssl://mqtt.navisense.de:8883",
-            mqttUsername = prefs.getString("mqtt_username", "") ?: "",
-            mqttPassword = prefs.getString("mqtt_password", "") ?: "",
-            mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
-            mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
-            mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
-            mqttStationName = prefs.getString("mqtt_station_name", "") ?: ""
-        )
+        return ServiceConfig.fromPreferences(this)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "porttracker-aiscatcher",
+                "TrustedDocks AIS",
                 NotificationManager.IMPORTANCE_MIN  // Minimum importance - no sound, no popup
             ).apply {
                 description = "AIS Receiver service status"
@@ -607,7 +760,7 @@ class AisReceiverService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("porttracker-aiscatcher")
+            .setContentTitle("TrustedDocks AIS")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
@@ -624,9 +777,17 @@ class AisReceiverService : Service() {
     }
 
     private fun acquireWakeLock() {
+        // CPU wake lock — keep CPU alive indefinitely
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "porttracker-aiscatcher:WakeLock")
-        wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24 hours max
+        wakeLock?.acquire() // No timeout — released explicitly in onDestroy
+        
+        // WiFi lock — prevent Android from turning off WiFi when screen is off
+        // Without this, the phone becomes unreachable over the network
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "porttracker-aiscatcher:WifiLock")
+        wifiLock?.acquire()
+        Log.i(TAG, "Wake lock and WiFi lock acquired")
     }
 
     private fun releaseWakeLock() {
@@ -634,6 +795,11 @@ class AisReceiverService : Service() {
             if (it.isHeld) it.release()
         }
         wakeLock = null
+        wifiLock?.let {
+            if (it.isHeld) it.release()
+        }
+        wifiLock = null
+        Log.i(TAG, "Wake lock and WiFi lock released")
     }
     /**
      * Start the MQTT publisher on a background thread.
@@ -649,7 +815,7 @@ class AisReceiverService : Service() {
                 val topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
                 val topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
                 val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
-                val stationName = prefs.getString("mqtt_station_name", "") ?: ""
+                val stationName = prefs.getString("pref_station_name", "") ?: ""
 
                 if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
                     Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
@@ -690,6 +856,65 @@ class AisReceiverService : Service() {
             }
         }, "MQTT-Setup").start()
     }
+
+    /**
+     * Apply configuration changes that are safe to apply live (without native engine restart).
+     * Called automatically after config save from the web UI.
+     */
+    fun applyLiveConfigChanges() {
+        Log.i(TAG, "Applying live config changes...")
+        val config = ServiceConfig.fromPreferences(this)
+
+        // Restart FRP tunnel with new settings
+        manageFrpTunnel(config.remoteAccessEnabled, config.stationName, config.webViewerPort)
+
+        // Restart MQTT publisher with new settings
+        if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
+            stopMqttPublisher()
+            startMqttPublisher()
+        } else {
+            // MQTT disabled — stop if running
+            stopMqttPublisher()
+        }
+
+        Log.i(TAG, "Live config changes applied (FRP=${config.remoteAccessEnabled}, MQTT=${config.mqttEnabled})")
+    }
+
+    /**
+     * Stop the current MQTT publisher cleanly.
+     */
+    private fun stopMqttPublisher() {
+        mqttNmeaListener?.let { removeNMEAListener(it) }
+        mqttNmeaListener = null
+        mqttPublisher?.stop()
+        mqttPublisher = null
+    }
+
+    /**
+     * Public method to restart MQTT publisher from API endpoint.
+     */
+    fun restartMqttPublisher() {
+        Log.i(TAG, "Restarting MQTT publisher via API...")
+        stopMqttPublisher()
+        val config = ServiceConfig.fromPreferences(this)
+        if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
+            startMqttPublisher()
+        } else {
+            Log.i(TAG, "MQTT disabled or not configured — not starting publisher")
+        }
+    }
+
+    /**
+     * Public method to restart FRP tunnel from API endpoint.
+     */
+    fun restartFrpTunnel() {
+        Log.i(TAG, "Restarting FRP tunnel via API...")
+        val config = ServiceConfig.fromPreferences(this)
+        // Stop existing tunnel first
+        frpTunnelManager?.stopTunnel()
+        // Start with new config
+        manageFrpTunnel(config.remoteAccessEnabled, config.stationName, config.webViewerPort)
+    }
 }
 
 /**
@@ -728,7 +953,48 @@ data class ServiceConfig(
     val mqttTopicJson: String = "",
     val mqttFormat: String = "aisc-json",
     val mqttStationName: String = ""
-)
+) {
+    companion object {
+        fun fromPreferences(context: Context): ServiceConfig {
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+            
+            // Load UDP outputs
+            val udpOutputs = (1..4).map { i ->
+                UdpOutput(
+                    enabled = prefs.getBoolean("udp${i}_enabled", false),
+                    host = prefs.getString("udp${i}_host", "127.0.0.1") ?: "127.0.0.1",
+                    port = prefs.getString("udp${i}_port", (10109 + i).toString())?.toIntOrNull() ?: (10109 + i),
+                    json = prefs.getBoolean("udp${i}_json", false)
+                )
+            }
+            
+            return ServiceConfig(
+                deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
+                udpOutputs = udpOutputs,
+                tcpEnabled = prefs.getBoolean("tcp_enabled", false),
+                tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
+                webViewerEnabled = prefs.getBoolean("webviewer_enabled", false),
+                webViewerPort = prefs.getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080,
+                gpsdEnabled = prefs.getBoolean("gpsd_enabled", false),
+                gpsdHost = prefs.getString("gpsd_host", "127.0.0.1") ?: "127.0.0.1",
+                gpsdPort = prefs.getString("gpsd_port", "2947")?.toIntOrNull() ?: 2947,
+                gpsdInterval = prefs.getString("gpsd_interval", "10")?.toIntOrNull() ?: 10,
+                hubEnabled = prefs.getBoolean("hub_sharing", false),
+                hubKey = prefs.getString("hub_key", "") ?: "",
+                remoteAccessEnabled = prefs.getBoolean("pref_enable_remote", false),
+                stationName = prefs.getString("pref_station_name", "") ?: "",
+                mqttEnabled = prefs.getBoolean("mqtt_enabled", false),
+                mqttBrokerUrl = prefs.getString("mqtt_broker_url", "ssl://mqtt.navisense.de:8883") ?: "ssl://mqtt.navisense.de:8883",
+                mqttUsername = prefs.getString("mqtt_username", "") ?: "",
+                mqttPassword = prefs.getString("mqtt_password", "") ?: "",
+                mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
+                mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
+                mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
+                mqttStationName = prefs.getString("pref_station_name", "") ?: ""
+            )
+        }
+    }
+}
 
 /**
  * SDR device types

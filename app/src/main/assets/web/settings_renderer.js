@@ -17,6 +17,14 @@ var SettingsRenderer = {
             const response = await fetch('/admin/api/config');
             if (!response.ok) throw new Error("Failed to fetch config");
             this.currentConfig = await response.json();
+            // Also fetch live status to get SDR/service state
+            try {
+                const statusResp = await fetch('/admin/api/status');
+                if (statusResp.ok) {
+                    const status = await statusResp.json();
+                    this.currentConfig = { ...this.currentConfig, ...status };
+                }
+            } catch (e2) { /* status fetch is best-effort */ }
             this.render();
         } catch (e) {
             const errorDiv = document.createElement('div');
@@ -48,6 +56,9 @@ var SettingsRenderer = {
                     <button class="nav-link" id="tab-location" data-bs-toggle="tab" data-bs-target="#pane-location" type="button">Location</button>
                 </li>
                 <li class="nav-item">
+                    <button class="nav-link" id="tab-app" data-bs-toggle="tab" data-bs-target="#pane-app" type="button"><i class="bi bi-gear-wide-connected"></i> App</button>
+                </li>
+                <li class="nav-item">
                     <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">TrustedDocks</button>
                 </li>
                 <li class="nav-item">
@@ -63,6 +74,7 @@ var SettingsRenderer = {
                 <div class="tab-pane fade" id="pane-networking">${this.renderNetworkingPane()}</div>
                 <div class="tab-pane fade" id="pane-settings">${this.renderSettingsPane()}</div>
                 <div class="tab-pane fade" id="pane-location">${this.renderLocationPane()}</div>
+                <div class="tab-pane fade" id="pane-app">${this.renderAppPane()}</div>
                 <div class="tab-pane fade" id="pane-porttracker">${this.renderPorttrackerPane()}</div>
                 <div class="tab-pane fade" id="pane-database">${this.renderDatabasePane()}</div>
                 <div class="tab-pane fade" id="pane-control">${this.renderControlPane()}</div>
@@ -96,6 +108,9 @@ var SettingsRenderer = {
         // This is a static view of the current config values deemed "Status" related
         const remoteEnabled = this.bool('pref_enable_remote');
         const mqttEnabled = this.bool('mqtt_enabled');
+        const stationName = this.val('pref_station_name', '').trim();
+        const sanitizedName = stationName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const externalUrl = (remoteEnabled && sanitizedName) ? `http://${sanitizedName}.connect.porttracker.co` : '';
         return `
             <h5>Application Info</h5>
             <table class="table table-bordered">
@@ -103,6 +118,7 @@ var SettingsRenderer = {
                 <tr><th>Device Type</th><td>${this.getDeviceTypeName(this.val('device_type', '1'))}</td></tr>
                 <tr><th>Web Server Port</th><td>${this.val('pref_local_web_port', '8080')}</td></tr>
                 <tr><th>Remote Access</th><td>${remoteEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
+                ${externalUrl ? `<tr><th>External URL</th><td><a href="${externalUrl}" target="_blank" class="text-primary"><i class="bi bi-box-arrow-up-right"></i> ${externalUrl}</a></td></tr>` : ''}
                 <tr><th>MQTT Publishing</th><td>${mqttEnabled ? '<span class="text-success">🟢 Enabled</span>' : '<span class="text-secondary">⚪ Disabled</span>'}</td></tr>
             </table>
         `;
@@ -195,9 +211,17 @@ var SettingsRenderer = {
                 </tbody>
             </table>
             
-            <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshSdrStatus()">
-                <i class="bi bi-arrow-clockwise"></i> Refresh Status
-            </button>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshSdrStatus()">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh Status
+                </button>
+                <button class="btn btn-outline-primary btn-sm" onclick="SettingsRenderer.requestUsbPermission()">
+                    <i class="bi bi-shield-check"></i> Request USB Permission
+                </button>
+                <button class="btn btn-outline-success btn-sm" onclick="SettingsRenderer.restartEngine()">
+                    <i class="bi bi-play-circle"></i> Restart SDR Engine
+                </button>
+            </div>
             
             <hr>
             <h5 class="mt-4"><i class="bi bi-gear"></i> SDR Configuration</h5>
@@ -216,21 +240,52 @@ var SettingsRenderer = {
                 <input type="number" class="form-control" id="frequency_correction" value="${this.val('frequency_correction', '0')}">
                 <div class="form-text">Frequency correction in Parts Per Million (ppm)</div>
             </div>
+            
+            <hr>
+            <h5 class="mt-4"><i class="bi bi-ethernet"></i> TCP Listener</h5>
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="tcp_enabled" ${this.bool('tcp_enabled') ? 'checked' : ''}>
+                        <label class="form-check-label" for="tcp_enabled">Enable TCP Listener</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TCP Port</label>
+                        <input type="number" class="form-control" id="tcp_port" value="${this.val('tcp_port', '10111')}">
+                    </div>
+                </div>
+            </div>
         `;
     },
 
     renderNetworkingPane: function () {
+        const remoteEnabled = this.bool('pref_enable_remote');
+        const stationName = this.val('pref_station_name', '').trim();
+        const sanitizedName = stationName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const externalUrl = (remoteEnabled && sanitizedName) ? `https://${sanitizedName}.connect.porttracker.co` : '';
         return `
             <h5>Remote Access</h5>
             <div class="mb-3 form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="pref_enable_remote" ${this.bool('pref_enable_remote') ? 'checked' : ''}>
+                <input class="form-check-input" type="checkbox" id="pref_enable_remote" ${remoteEnabled ? 'checked' : ''}>
                 <label class="form-check-label" for="pref_enable_remote">Enable External Web Portal</label>
             </div>
             <div class="mb-3">
                 <label class="form-label">Station Name</label>
                 <input type="text" class="form-control" id="pref_station_name" value="${this.val('pref_station_name')}">
-                <div class="form-text">Unique name for your station (e.g. my-boat-1)</div>
+                <div class="form-text">Unique name for your station (e.g. my-boat-1). This is used as the subdomain for remote access.</div>
             </div>
+            ${externalUrl ? `
+            <div class="alert alert-success d-flex align-items-center" role="alert">
+                <i class="bi bi-globe2 me-2" style="font-size: 1.2rem;"></i>
+                <div>
+                    <strong>External Portal Active</strong><br>
+                    <a href="${externalUrl}" target="_blank" class="alert-link">${externalUrl}</a>
+                </div>
+            </div>` : (remoteEnabled && !sanitizedName ? `
+            <div class="alert alert-warning d-flex align-items-center" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <div>Set a <strong>Station Name</strong> above to enable remote access.</div>
+            </div>` : '')}
             <hr>
             <h5>Local Network</h5>
              <div class="mb-3">
@@ -267,6 +322,12 @@ var SettingsRenderer = {
                             <label class="form-label">Port</label>
                             <input type="number" class="form-control" id="udp${i}_port" value="${this.val(`udp${i}_port`, 10109 + i)}">
                         </div>
+                        <div class="col-12 mt-2">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="udp${i}_json" ${this.bool(`udp${i}_json`) ? 'checked' : ''}>
+                                <label class="form-check-label" for="udp${i}_json">JSON format</label>
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -288,6 +349,17 @@ var SettingsRenderer = {
                     <label class="form-label">GPSD Port</label>
                     <input type="number" class="form-control" id="gpsd_port" value="${this.val('gpsd_port', '2947')}">
                 </div>
+            </div>
+            <div class="mb-3 mt-3">
+                <label class="form-label">Update Interval</label>
+                <select class="form-select" id="gpsd_interval">
+                    <option value="1" ${this.val('gpsd_interval', '10') === '1' ? 'selected' : ''}>1s</option>
+                    <option value="2" ${this.val('gpsd_interval', '10') === '2' ? 'selected' : ''}>2s</option>
+                    <option value="5" ${this.val('gpsd_interval', '10') === '5' ? 'selected' : ''}>5s</option>
+                    <option value="10" ${this.val('gpsd_interval', '10') === '10' ? 'selected' : ''}>10s</option>
+                    <option value="30" ${this.val('gpsd_interval', '10') === '30' ? 'selected' : ''}>30s</option>
+                    <option value="60" ${this.val('gpsd_interval', '10') === '60' ? 'selected' : ''}>60s</option>
+                </select>
             </div>
         `;
 
@@ -383,9 +455,94 @@ var SettingsRenderer = {
         `;
     },
 
+    renderAppPane: function () {
+        return `
+            <h5><i class="bi bi-gear-wide-connected"></i> App Settings</h5>
+            
+            <!-- Auto-Start -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-power"></i> Auto-Start</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_boot" ${this.bool('auto_start_boot') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_boot">Start on device boot</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_usb" ${this.bool('auto_start_usb') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_usb">Start when USB device connected</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="auto_start_launch" ${this.bool('auto_start_launch') ? 'checked' : ''}>
+                        <label class="form-check-label" for="auto_start_launch">Start when app opens</label>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="web_fallback_mode" ${this.bool('web_fallback_mode') ? 'checked' : ''}>
+                        <label class="form-check-label" for="web_fallback_mode">Web-only mode if no USB device</label>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Web Authentication -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-shield-lock"></i> Web Authentication</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="web_auth_enabled" ${this.bool('web_auth_enabled') ? 'checked' : ''}>
+                        <label class="form-check-label" for="web_auth_enabled">Require password for web access</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-control" id="web_auth_username" value="${this.val('web_auth_username', 'admin')}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="web_auth_password" value="${this.val('web_auth_password', 'admin')}">
+                            <button class="btn btn-outline-secondary" type="button" 
+                                onclick="const i=document.getElementById('web_auth_password'); i.type = i.type==='password' ? 'text' : 'password'">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="alert alert-warning mb-0">
+                        ⚠️ Changing authentication settings will take effect after service restart.
+                    </div>
+                </div>
+            </div>
+            
+            <!-- DNS -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-globe"></i> DNS</div>
+                <div class="card-body">
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="dns_manual" ${this.bool('dns_manual') ? 'checked' : ''}>
+                        <label class="form-check-label" for="dns_manual">Use custom DNS servers</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Primary DNS</label>
+                        <input type="text" class="form-control" id="dns_primary" value="${this.val('dns_primary', '8.8.8.8')}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Secondary DNS</label>
+                        <input type="text" class="form-control" id="dns_secondary" value="${this.val('dns_secondary', '8.8.4.4')}">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Battery -->
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-battery-charging"></i> Battery</div>
+                <div class="card-body">
+                    <div class="alert alert-info mb-0">
+                        To prevent Android from stopping the AIS service, disable battery optimization for this app in Android Settings → Apps → PortTracker AIS → Battery → Unrestricted.
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
     renderPorttrackerPane: function () {
         const mqttEnabled = this.bool('mqtt_enabled');
-        const stationName = this.val('mqtt_station_name', '');
         const brokerUrl = this.val('mqtt_broker_url', 'ssl://mqtt.navisense.de:8883');
         const mqttUsername = this.val('mqtt_username', '');
         const mqttPassword = this.val('mqtt_password', '');
@@ -396,8 +553,21 @@ var SettingsRenderer = {
 
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
-            <p class="text-muted small">Connect your AIS station to the TrustedDocks MQTT gateway for real-time data sharing. 
-            Enter the credentials from your <strong>TrustedDocks AIS Station</strong> page.</p>
+            
+            <!-- Quick Setup via Paste Config -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-clipboard-plus"></i> Paste Station Config</h6>
+                    <p class="text-muted" style="font-size:0.85em">Copy the config from your <a href="https://www.trusteddocks.com/account/ais-stations" target="_blank">TrustedDocks account</a> and paste it below:</p>
+                    <textarea id="station-config-paste" class="form-control font-monospace" rows="8" placeholder="[TrustedDocks Station]\nstation_name = ...\nbroker = ...\nusername = ...\npassword = ...\ntopic_ais_raw = ...\ntopic_ais_json = ..."></textarea>
+                    <button class="btn btn-primary mt-2" onclick="SettingsRenderer.applyPastedConfig()">
+                        <i class="bi bi-check-lg"></i> Apply Config
+                    </button>
+                    <div id="paste-config-status" class="mt-2"></div>
+                </div>
+            </div>
+            
+            <p class="text-muted small">Or enter credentials manually below.</p>
             
             <div class="card mb-3">
                 <div class="card-header"><i class="bi bi-key"></i> MQTT Credentials</div>
@@ -447,9 +617,10 @@ var SettingsRenderer = {
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Station Name (optional)</label>
-                        <input type="text" class="form-control" id="mqtt_station_name" 
-                            value="${stationName}" placeholder="e.g. My AIS Station">
+                        <label class="form-label">Station Name</label>
+                        <input type="text" class="form-control" value="${this.val('pref_station_name', '')}" disabled
+                            placeholder="Set in Networking → Station Name">
+                        <div class="form-text">Uses the station name from Networking settings. UUID <code>${antennaUuid || '—'}</code> is the unique station identifier.</div>
                     </div>
                 </div>
             </div>
@@ -551,14 +722,18 @@ var SettingsRenderer = {
         // Collect Settings
         collect('device_type', 'string'); // Saved as string "1" usually
         collect('frequency_correction', 'int');
+        collect('tcp_enabled', 'bool');
+        collect('tcp_port', 'int');
         collect('gpsd_enabled', 'bool');
         collect('gpsd_host');
         collect('gpsd_port', 'int');
+        collect('gpsd_interval');
 
         for (let i = 1; i <= 4; i++) {
             collect(`udp${i}_enabled`, 'bool');
             collect(`udp${i}_host`);
             collect(`udp${i}_port`, 'int');
+            collect(`udp${i}_json`, 'bool');
         }
 
         // Collect TrustedDocks / MQTT settings
@@ -570,10 +745,22 @@ var SettingsRenderer = {
         collect('mqtt_topic_raw');
         collect('mqtt_topic_json');
         collect('mqtt_format');
-        collect('mqtt_station_name');
+        // mqtt_station_name removed — uses pref_station_name instead
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');
+
+        // Collect App settings
+        collect('auto_start_boot', 'bool');
+        collect('auto_start_usb', 'bool');
+        collect('auto_start_launch', 'bool');
+        collect('web_fallback_mode', 'bool');
+        collect('web_auth_enabled', 'bool');
+        collect('web_auth_username');
+        collect('web_auth_password');
+        collect('dns_manual', 'bool');
+        collect('dns_primary');
+        collect('dns_secondary');
 
         // Collect Location settings
         const installationType = document.getElementById('installation_fixed')?.checked ? 'fixed' : 'moving';
@@ -585,7 +772,7 @@ var SettingsRenderer = {
         collect('vessel_mmsi');
 
         // Send to API
-        this.showLoading("Saving configuration and restarting service...");
+        this.showLoading("Saving configuration...");
 
         try {
             const response = await fetch('/admin/api/config', {
@@ -595,31 +782,31 @@ var SettingsRenderer = {
             });
 
             if (response.ok) {
-                setTimeout(() => {
-                    window.location.reload();
-                }, 5000); // Wait 5s for restart then reload
+                this.hideLoading();
+                alert("✅ Settings saved and applied! MQTT and FRP connections have been updated.");
+                // Reload settings from server after a short delay to let changes apply
+                setTimeout(() => { this.init(); }, 1500);
             } else {
-                throw new Error("Save failed");
+                throw new Error("Save failed (HTTP " + response.status + ")");
             }
         } catch (e) {
-            alert("Error saving settings: " + e.message);
             this.hideLoading();
+            // Don't show error for network issues during reload — settings were likely saved
+            if (e.message === "Failed to fetch") {
+                alert("⚠️ Settings saved, but the connection was briefly interrupted. Please refresh the page.");
+            } else {
+                alert("Error saving settings: " + e.message);
+            }
         }
     },
 
     restartService: async function () {
-        if (!confirm("Are you sure you want to restart the AIS Service?")) return;
+        if (!confirm("To apply settings changes, please close and reopen the app. Continue?")) return;
 
-        this.showLoading("Restarting Service...");
         try {
             await fetch('/admin/restart', { method: 'POST' });
-            setTimeout(() => {
-                window.location.reload();
-            }, 5000);
-        } catch (e) {
-            alert("Error restarting: " + e.message);
-            this.hideLoading();
-        }
+        } catch (e) { /* ignore */ }
+        alert("Please close and reopen the app to apply changes.");
     },
 
     refreshGatewayStatus: async function () {
@@ -671,6 +858,44 @@ var SettingsRenderer = {
         }
     },
 
+    requestUsbPermission: async function () {
+        try {
+            // Try native bridge first (works when in app WebView)
+            if (typeof Android !== 'undefined' && Android.requestUsbPermission) {
+                Android.requestUsbPermission();
+                setTimeout(() => this.refreshSdrStatus(), 3000);
+                return;
+            }
+            // Fallback: use API endpoint (works from external browser)
+            const response = await fetch('/admin/api/usb/request_permission', { method: 'POST' });
+            const result = await response.json();
+            if (result.success) {
+                alert('✅ ' + result.message);
+            } else {
+                alert('⚠️ ' + (result.message || result.error || 'Failed'));
+            }
+            setTimeout(() => this.refreshSdrStatus(), 3000);
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    },
+
+    restartEngine: async function () {
+        if (!confirm('Restart the SDR engine? This will re-scan USB devices and reconnect.')) return;
+        try {
+            const response = await fetch('/admin/api/engine/restart', { method: 'POST' });
+            const result = await response.json();
+            if (result.success) {
+                alert('✅ Engine restart triggered. Please wait...');
+            } else {
+                alert('⚠️ ' + (result.error || 'Failed to restart'));
+            }
+            setTimeout(() => this.refreshSdrStatus(), 5000);
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    },
+
     refreshSdrStatus: async function () {
         try {
             const response = await fetch('/admin/api/status');
@@ -698,12 +923,12 @@ var SettingsRenderer = {
             // Update device info
             const deviceName = document.getElementById('sdr_device_name');
             if (deviceName) {
-                deviceName.textContent = status.usb_device_name || 'No device';
+                deviceName.innerHTML = '<strong>' + (status.sdr_device_name || 'No device') + '</strong>';
             }
 
             const sdrConnected = document.getElementById('sdr_connected');
             if (sdrConnected) {
-                const connected = status.usb_device_found === true;
+                const connected = status.sdr_connected === true;
                 sdrConnected.innerHTML = connected
                     ? '<span class="text-success">✅ Connected</span>'
                     : '<span class="text-danger">❌ Not Connected</span>';
@@ -711,10 +936,26 @@ var SettingsRenderer = {
 
             const usbPermission = document.getElementById('sdr_usb_permission');
             if (usbPermission) {
-                const granted = status.usb_permission_granted === true;
+                const granted = status.sdr_permission === true;
                 usbPermission.innerHTML = granted
                     ? '<span class="text-success">✅ Granted</span>'
                     : '<span class="text-warning">⚠️ Not Granted</span>';
+            }
+
+            // Update USB device list
+            const usbDeviceList = document.getElementById('usb_device_list');
+            if (usbDeviceList && Array.isArray(status.usb_devices)) {
+                if (status.usb_devices.length > 0) {
+                    usbDeviceList.innerHTML = status.usb_devices.map(dev => `
+                        <tr>
+                            <td>${dev.name || 'Unknown'}</td>
+                            <td><code>${dev.vendorId || '?'}:${dev.productId || '?'}</code></td>
+                            <td>${dev.isSDR ? '<span class="badge bg-primary">SDR</span>' : ''}${dev.hasPermission ? ' <span class="badge bg-success">Permitted</span>' : ''}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    usbDeviceList.innerHTML = '<tr><td colspan="3" class="text-muted">No USB devices detected</td></tr>';
+                }
             }
 
             // Update config for full re-render if needed
@@ -841,6 +1082,74 @@ var SettingsRenderer = {
             );
         } else {
             alert('Geolocation is not supported by this browser');
+        }
+    },
+
+    // --- Paste Config for TrustedDocks Provisioning ---
+
+    applyPastedConfig: function () {
+        const textarea = document.getElementById('station-config-paste');
+        const statusDiv = document.getElementById('paste-config-status');
+        if (!textarea || !statusDiv) return;
+
+        const text = textarea.value.trim();
+        if (!text) {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Please paste a config snippet first.</span>';
+            return;
+        }
+
+        // Parse INI-like config
+        const parsed = {};
+        const lines = text.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('[')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx === -1) continue;
+            const key = trimmed.substring(0, eqIdx).trim();
+            const value = trimmed.substring(eqIdx + 1).trim();
+            parsed[key] = value;
+        }
+
+        // Map config keys to form field IDs
+        const fieldMap = {
+            'station_name': 'mqtt_station_name',
+            'antenna_uuid': 'mqtt_antenna_uuid',
+            'broker': 'mqtt_broker_url',
+            'username': 'mqtt_username',
+            'password': 'mqtt_password',
+            'topic_ais_raw': 'mqtt_topic_raw',
+            'topic_ais_json': 'mqtt_topic_json'
+        };
+
+        let filled = 0;
+        for (const [configKey, fieldId] of Object.entries(fieldMap)) {
+            if (parsed[configKey]) {
+                const el = document.getElementById(fieldId);
+                if (el) {
+                    el.value = parsed[configKey];
+                    el.style.borderColor = '#198754';
+                    el.style.boxShadow = '0 0 0 0.2rem rgba(25,135,84,0.25)';
+                    setTimeout(() => {
+                        el.style.borderColor = '';
+                        el.style.boxShadow = '';
+                    }, 3000);
+                    filled++;
+                }
+            }
+        }
+
+        if (filled > 0) {
+            const name = parsed['station_name'] || 'Unknown';
+            statusDiv.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle-fill"></i>
+                    <strong>Station "${name}" configured!</strong><br>
+                    ${filled} fields filled. Click <strong>Save & Restart Service</strong> to activate.
+                </div>
+            `;
+        } else {
+            statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not parse any fields from the pasted config. Check the format.</span>';
         }
     }
 };

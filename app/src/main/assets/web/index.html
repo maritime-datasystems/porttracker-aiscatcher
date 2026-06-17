@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PortTracker AIS</title>
+    <title>TrustedDocks AIS</title>
     <style>
         :root {
             --primary-color: #005f73;
@@ -169,38 +169,24 @@
 
     <header>
         <div class="menu-toggle" onclick="toggleMenu()">☰</div>
-        <h1 style="margin-left: 1rem;">porttracker-aiscatcher</h1>
+        <h1 style="margin-left: 1rem;">TrustedDocks AIS</h1>
     </header>
 
     <div class="overlay" onclick="toggleMenu()"></div>
 
     <nav id="sidebar">
         <ul>
-            <li><a href="#" onclick="showSection('start', this)" class="active">Start</a></li>
+            <li><a href="#" onclick="showSection('status', this)" class="active">Status</a></li>
             <li><a href="#" onclick="showSection('map', this)">Map</a></li>
-            <li><a href="#" onclick="showSection('status', this)">Status</a></li>
             <li><a href="#" onclick="showSection('stats', this)">Stats</a></li>
             <li><a href="#" onclick="showSection('settings', this)">Settings</a></li>
-            <li><a href="#" onclick="showSection('control', this)">Control</a></li>
             <li><a href="#" onclick="showSection('nmea', this)">NMEA</a></li>
             <li><a href="#" onclick="showSection('logs', this)">Logs</a></li>
         </ul>
     </nav>
 
     <main>
-        <section id="start" class="active">
-            <div class="card">
-                <h2>Hello World!</h2>
-                <p>Welcome to <strong>porttracker-aiscatcher</strong>.</p>
-                <p>This is your custom mobile dashboard.</p>
-            </div>
-        </section>
-
-        <section id="map" style="padding: 0; height: calc(100vh - 80px); position: relative;">
-            <div id="leaflet_map" style="width: 100%; height: 100%; border-radius: 8px;"></div>
-        </section>
-
-        <section id="status">
+        <section id="status" class="active">
             <div class="card">
                 <h2>System Status</h2>
                 <table style="width: 100%; border-collapse: collapse;">
@@ -250,6 +236,10 @@
             </div>
         </section>
 
+        <section id="map" style="padding: 0; height: calc(100vh - 80px); position: relative;">
+            <div id="leaflet_map" style="width: 100%; height: 100%; border-radius: 8px;"></div>
+        </section>
+
         <section id="stats">
             <div class="card">
                 <h2>Message Rate</h2>
@@ -287,12 +277,6 @@
             </div>
         </section>
 
-        <section id="control">
-            <div class="card">
-                <h2>Control</h2>
-                <p>Coming Soon...</p>
-            </div>
-        </section>
 
         <section id="nmea">
             <div class="card">
@@ -348,6 +332,15 @@
             document.querySelector('.overlay').classList.toggle('active');
         }
 
+        function requestUsbPermission() {
+            // Call native Android bridge (only available when running inside the app WebView)
+            if (typeof Android !== 'undefined' && Android.requestUsbPermission) {
+                Android.requestUsbPermission();
+            } else {
+                alert('USB permissions can only be managed from within the app.');
+            }
+        }
+
         async function fetchStatus() {
             try {
                 const res = await fetch('/admin/api/status_ui');
@@ -362,7 +355,13 @@
                 getStatusEl('st_version').innerText = data.app_version;
                 getStatusEl('st_ip').innerText = data.local_ip;
                 getStatusEl('st_net').innerText = data.network_status;
-                getStatusEl('st_device').innerText = data.device_status;
+                getStatusEl('st_device').innerHTML = data.device_status;
+
+                // If device needs permission, show a button (only works in embedded WebView)
+                if (data.device_status && data.device_status.includes('permission')) {
+                    getStatusEl('st_device').innerHTML = data.device_status +
+                        ' <button onclick="requestUsbPermission()" style="margin-left:8px; padding:4px 12px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Grant Permission</button>';
+                }
                 getStatusEl('st_msg').innerText = data.msg_count;
 
                 getStatusEl('st_gps_status').innerText = data.gps_status;
@@ -482,95 +481,67 @@
             }
         }
 
-        // --- NMEA Logic ---
-        let nmeaReader = null;
-        let nmeaAbortController = null;
+        // --- NMEA Logic (polling) ---
+        let nmeaPollTimer = null;
+        let nmeaLastLines = new Set();
 
         function startNmeaStream() {
-            if (nmeaReader) return;
+            if (nmeaPollTimer) return;
 
             const statusEl = document.getElementById('nmea_status');
             statusEl.innerText = "Connecting...";
             statusEl.style.color = "orange";
+            nmeaLastLines.clear();
 
-            nmeaAbortController = new AbortController();
+            function poll() {
+                fetch('/api/nmea_buffer')
+                    .then(r => r.json())
+                    .then(data => {
+                        const statusEl = document.getElementById('nmea_status');
+                        if (statusEl && statusEl.innerText !== "Streaming") {
+                            statusEl.innerText = "Streaming";
+                            statusEl.style.color = "green";
+                        }
 
-            fetch('/api/sse', { signal: nmeaAbortController.signal })
-                .then(response => {
-                    nmeaReader = response.body.getReader();
-                    const decoder = new TextDecoder("utf-8");
-                    statusEl.innerText = "Streaming (Connected)";
-                    statusEl.style.color = "green";
-                    console.log("Stream: Connected");
+                        if (data.lines && data.lines.length > 0) {
+                            const textarea = document.getElementById('nmea_output');
+                            // Show all lines from buffer (dedupe via Set)
+                            const newLines = data.lines.filter(l => !nmeaLastLines.has(l));
+                            if (newLines.length > 0) {
+                                textarea.value += newLines.join("\n") + "\n";
+                                // Track last batch to avoid dupes
+                                nmeaLastLines = new Set(data.lines);
 
-                    function readStream() {
-                        nmeaReader.read().then(({ done, value }) => {
-                            if (done) {
-                                console.log("Stream: Complete");
-                                statusEl.innerText = "Disconnected";
-                                statusEl.style.color = "red";
-                                nmeaReader = null;
-                                nmeaAbortController = null;
-                                return;
-                            }
-
-                            const chunk = decoder.decode(value, { stream: true });
-                            // console.log("Stream: Received Chunk", chunk.length);
-
-                            // Simple SSE Parser
-                            const lines = chunk.split('\n');
-                            lines.forEach(line => {
-                                // console.log("Stream Line:", line);
-                                if (line.startsWith("data:")) {
-                                    const data = line.substring(5).trim();
-                                    // console.log("Stream Data:", data);
-                                    if (data) {
-                                        const textarea = document.getElementById('nmea_output');
-                                        textarea.value += data + "\n";
-
-                                        if (textarea.value.length > 50000) {
-                                            textarea.value = textarea.value.substring(textarea.value.length - 20000);
-                                        }
-
-                                        if (document.getElementById('auto_scroll').checked) {
-                                            textarea.scrollTop = textarea.scrollHeight;
-                                        }
-                                    }
+                                if (textarea.value.length > 50000) {
+                                    textarea.value = textarea.value.substring(textarea.value.length - 20000);
                                 }
-                            });
+                                if (document.getElementById('auto_scroll').checked) {
+                                    textarea.scrollTop = textarea.scrollHeight;
+                                }
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        const s = document.getElementById('nmea_status');
+                        if (s) { s.innerText = "Error"; s.style.color = "red"; }
+                    });
+            }
 
-                            readStream();
-                        }).catch(error => {
-                            console.error("Stream: Error reading", error);
-                            statusEl.innerText = "Error - Retrying...";
-                            statusEl.style.color = "orange";
-                            nmeaReader = null;
-                            nmeaAbortController = null;
-                            setTimeout(startNmeaStream, 2000); // Retry
-                        });
-                    }
-                    readStream();
-                })
-                .catch(error => {
-                    if (error.name !== 'AbortError') {
-                        console.error("Stream: Connection failed", error);
-                        statusEl.innerText = "Connection Failed";
-                        statusEl.style.color = "red";
-                    }
-                    nmeaReader = null;
-                    nmeaAbortController = null;
-                });
+            poll(); // First poll immediately
+            nmeaPollTimer = setInterval(poll, 1000);
         }
 
         function stopNmeaStream() {
-            if (nmeaAbortController) {
-                nmeaAbortController.abort();
-                nmeaAbortController = null;
+            if (nmeaPollTimer) {
+                clearInterval(nmeaPollTimer);
+                nmeaPollTimer = null;
             }
-            nmeaReader = null;
+            nmeaLastLines.clear();
             const statusEl = document.getElementById('nmea_status');
-            statusEl.innerText = "Stopped";
-            statusEl.style.color = "#666";
+            if (statusEl) {
+                statusEl.innerText = "Stopped";
+                statusEl.style.color = "#666";
+            }
         }
 
         // --- Navigation Logic ---
@@ -612,6 +583,13 @@
             // Settings Init
             if (id === 'settings' && window.SettingsRenderer) {
                 SettingsRenderer.init();
+            }
+
+            // NMEA: auto-start stream when entering, auto-stop when leaving
+            if (id === 'nmea') {
+                startNmeaStream();
+            } else {
+                stopNmeaStream();
             }
         }
 
@@ -706,6 +684,11 @@
             charts[id].data.datasets[0].data = values;
             charts[id].update();
         }
+    </script>
+    <script>
+        // Status is the default page — start fetching immediately
+        fetchStatus();
+        statusTimer = setInterval(fetchStatus, 2000);
     </script>
     <script src="settings_renderer.js"></script>
 </body>
