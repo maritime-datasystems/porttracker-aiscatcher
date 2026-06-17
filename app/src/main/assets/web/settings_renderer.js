@@ -262,7 +262,7 @@ var SettingsRenderer = {
         const remoteEnabled = this.bool('pref_enable_remote');
         const stationName = this.val('pref_station_name', '').trim();
         const sanitizedName = stationName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-        const externalUrl = (remoteEnabled && sanitizedName) ? `http://${sanitizedName}.connect.porttracker.co` : '';
+        const externalUrl = (remoteEnabled && sanitizedName) ? `https://${sanitizedName}.connect.porttracker.co` : '';
         return `
             <h5>Remote Access</h5>
             <div class="mb-3 form-check form-switch">
