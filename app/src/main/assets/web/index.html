@@ -480,11 +480,17 @@
             const hadLiveName = !!ship.shipname;
             const db = dbVessels[ship.mmsi];
             if (db) {
+                // Static identity/voyage fields fall back to the persistent DB.
                 if (!ship.shipname && db.name) ship.shipname = db.name;
                 if (!ship.imo && db.imo) ship.imo = db.imo;
                 if (!ship.callsign && db.callsign) ship.callsign = db.callsign;
                 if (!ship.destination && db.destination) ship.destination = db.destination;
                 if (!ship.shiptype && db.ship_type) ship.shiptype = db.ship_type;
+                if (!ship.draught && db.draught) ship.draught = db.draught;
+                if (!ship.to_bow && db.to_bow) ship.to_bow = db.to_bow;
+                if (!ship.to_stern && db.to_stern) ship.to_stern = db.to_stern;
+                if (!ship.to_port && db.to_port) ship.to_port = db.to_port;
+                if (!ship.to_starboard && db.to_starboard) ship.to_starboard = db.to_starboard;
             }
             ship._name = ship.shipname || ('MMSI ' + ship.mmsi);
             ship._cached = !hadLiveName && !!ship.shipname; // name came from cache
@@ -518,6 +524,7 @@
                     ${f('Heading', ship.heading != null && ship.heading < 360 ? ship.heading + '°' : '')}
                     ${f('Destination', ship.destination)}
                     ${f('Draught', ship.draught ? ship.draught + ' m' : '')}
+                    ${f('Length', (ship.to_bow != null && ship.to_stern != null) ? (ship.to_bow + ship.to_stern) + ' m' : '')}
                     ${f('Distance', ship.distance != null ? Number(ship.distance).toFixed(1) + ' NM' : '')}
                 </table>
                 <button onclick="showVesselFromMap(${ship.mmsi})" style="margin-top:8px;padding:4px 12px;background:#2196F3;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Details &rarr;</button>
