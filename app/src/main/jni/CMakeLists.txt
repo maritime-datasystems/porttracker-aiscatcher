@@ -5,8 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -ffast-math")
 
-# Path to original AIS-catcher-for-Android sources (5 levels up: jni→main→src→app→porttracker_aiscatcher→DEVPROJECTS)
-set(AIS_CATCHER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../AIS-catcher-for-Android/app/src/main/jni")
+# Native AIS-catcher sources are vendored into this directory (self-contained build).
+# Originally from https://github.com/jvde-github/AIS-catcher-for-Android (GPLv3) —
+# see AIS-catcher/LICENSE. Re-sync with scripts/vendor-native.sh.
+set(AIS_CATCHER_SRC "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Include directories
 include_directories(

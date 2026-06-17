@@ -18,26 +18,26 @@ A minimal headless AIS receiver service for Android. This app runs as a backgrou
 
 - Android 6.0+ (API 23+)
 - USB OTG support (for USB SDR devices)
-- AIS-catcher-for-Android project (for native sources)
+- Android SDK 34, NDK 25.1.8937393, CMake 3.22.1 (managed by the Gradle build)
 
 ## Building
 
-This project references native C++ sources from the AIS-catcher-for-Android project.
+This project is **self-contained**: the native C++ sources (AIS-catcher,
+libusb, rtl-sdr, airspy) are vendored under `app/src/main/jni/`, so no sibling
+checkout is required.
 
 ```bash
-# Clone both projects side-by-side
-git clone https://github.com/jvde-github/AIS-catcher-for-Android.git
-cd AIS-catcher-for-Android
-git submodule update --init --recursive
-cd ..
-
-# This project should be next to it
-# aiscatcher_porttracker/
-
-# Build
-cd aiscatcher_porttracker
+# Build (native sources are already in-tree)
 ./gradlew assembleDebug
 ```
+
+The vendored native sources originate from
+[jvde-github/AIS-catcher-for-Android](https://github.com/jvde-github/AIS-catcher-for-Android)
+(GPLv3 — see `app/src/main/jni/AIS-catcher/LICENSE`). To refresh them from an
+upstream checkout, use `scripts/vendor-native.sh` (see the script header).
+
+> Note: the FRP client binary (`libfrpc.so`) is not vendored — fetch it with
+> `scripts/fetch-frpc.sh` if you need remote access (see below).
 
 ## Remote access (FRP) binary
 
