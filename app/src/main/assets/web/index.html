@@ -481,53 +481,62 @@
             }
         }
 
-        // --- NMEA Logic ---
-        let nmeaEventSource = null;
+        // --- NMEA Logic (polling) ---
+        let nmeaPollTimer = null;
+        let nmeaLastLines = new Set();
 
         function startNmeaStream() {
-            if (nmeaEventSource) return;
+            if (nmeaPollTimer) return;
 
             const statusEl = document.getElementById('nmea_status');
             statusEl.innerText = "Connecting...";
             statusEl.style.color = "orange";
+            nmeaLastLines.clear();
 
-            nmeaEventSource = new EventSource('/api/sse');
+            function poll() {
+                fetch('/api/nmea_buffer')
+                    .then(r => r.json())
+                    .then(data => {
+                        const statusEl = document.getElementById('nmea_status');
+                        if (statusEl && statusEl.innerText !== "Streaming") {
+                            statusEl.innerText = "Streaming";
+                            statusEl.style.color = "green";
+                        }
 
-            nmeaEventSource.onopen = function() {
-                statusEl.innerText = "Streaming (Connected)";
-                statusEl.style.color = "green";
-                console.log("NMEA Stream: Connected");
-            };
+                        if (data.lines && data.lines.length > 0) {
+                            const textarea = document.getElementById('nmea_output');
+                            // Show all lines from buffer (dedupe via Set)
+                            const newLines = data.lines.filter(l => !nmeaLastLines.has(l));
+                            if (newLines.length > 0) {
+                                textarea.value += newLines.join("\n") + "\n";
+                                // Track last batch to avoid dupes
+                                nmeaLastLines = new Set(data.lines);
 
-            nmeaEventSource.onmessage = function(event) {
-                const data = event.data.trim();
-                if (!data) return;
+                                if (textarea.value.length > 50000) {
+                                    textarea.value = textarea.value.substring(textarea.value.length - 20000);
+                                }
+                                if (document.getElementById('auto_scroll').checked) {
+                                    textarea.scrollTop = textarea.scrollHeight;
+                                }
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        const s = document.getElementById('nmea_status');
+                        if (s) { s.innerText = "Error"; s.style.color = "red"; }
+                    });
+            }
 
-                const textarea = document.getElementById('nmea_output');
-                textarea.value += data + "\n";
-
-                if (textarea.value.length > 50000) {
-                    textarea.value = textarea.value.substring(textarea.value.length - 20000);
-                }
-
-                if (document.getElementById('auto_scroll').checked) {
-                    textarea.scrollTop = textarea.scrollHeight;
-                }
-            };
-
-            nmeaEventSource.onerror = function() {
-                statusEl.innerText = "Disconnected";
-                statusEl.style.color = "red";
-                console.log("NMEA Stream: Error/Disconnected");
-                // EventSource auto-reconnects, but update UI
-            };
+            poll(); // First poll immediately
+            nmeaPollTimer = setInterval(poll, 1000);
         }
 
         function stopNmeaStream() {
-            if (nmeaEventSource) {
-                nmeaEventSource.close();
-                nmeaEventSource = null;
+            if (nmeaPollTimer) {
+                clearInterval(nmeaPollTimer);
+                nmeaPollTimer = null;
             }
+            nmeaLastLines.clear();
             const statusEl = document.getElementById('nmea_status');
             if (statusEl) {
                 statusEl.innerText = "Stopped";

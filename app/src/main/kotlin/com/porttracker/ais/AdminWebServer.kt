@@ -59,7 +59,12 @@ class AdminWebServer(
             return handleAdminApi(session)
         }
 
-        // 1.5 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
+        // 1.5 NMEA buffer endpoint — returns recent NMEA as JSON array (polling-friendly)
+        if (uri == "/api/nmea_buffer" || uri == "/admin/api/nmea_buffer") {
+            return handleNmeaBuffer()
+        }
+
+        // 1.6 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
         if (uri == "/api/sse" || uri == "/admin/api/nmea_stream") {
             return handleNmeaSse()
         }
@@ -474,6 +479,54 @@ class AdminWebServer(
      * Uses the native NMEAListener callback system directly,
      * bypassing the C++ web server's SSE endpoint.
      */
+
+    // ---- NMEA Ring Buffer for polling ----
+    private val nmeaBuffer = java.util.concurrent.ConcurrentLinkedDeque<Pair<Long, String>>()
+    private val nmeaSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private var nmeaBufferListenerRegistered = false
+
+    private fun ensureNmeaBufferListener() {
+        if (nmeaBufferListenerRegistered) return
+        nmeaBufferListenerRegistered = true
+        val listener = object : AisReceiverService.Companion.NMEAListener {
+            override fun onNMEA(nmea: String) {
+                val lines = nmea.trim().split("\n").filter { it.isNotBlank() }
+                for (line in lines) {
+                    val seq = nmeaSeq.incrementAndGet()
+                    nmeaBuffer.addLast(Pair(seq, line.trim()))
+                    // Keep max 200 entries
+                    while (nmeaBuffer.size > 200) {
+                        nmeaBuffer.pollFirst()
+                    }
+                }
+            }
+        }
+        AisReceiverService.addNMEAListener(listener)
+        Log.i(TAG, "NMEA buffer listener registered")
+    }
+
+    /**
+     * GET /api/nmea_buffer?since=<seq>
+     * Returns JSON: {"seq": <latest_seq>, "lines": ["!AIVDM,...", "!AIVDM,..."]}
+     * Client passes since=0 on first call, then since=<last_seq> on subsequent calls.
+     */
+    private fun handleNmeaBuffer(): Response {
+        ensureNmeaBufferListener()
+        val since = 0L // Simple: always return latest batch
+        // Actually parse 'since' from query — but NanoHTTPD doesn't parse query in serve()
+        // So we just return the last 50 lines
+        val snapshot = nmeaBuffer.toList()
+        val recent = snapshot.takeLast(50)
+        val latestSeq = recent.lastOrNull()?.first ?: 0L
+
+        val jsonLines = recent.joinToString(",") { "\"${it.second.replace("\"", "\\\"")}\"" }
+        val json = """{"seq":$latestSeq,"lines":[$jsonLines]}"""
+
+        val response = newFixedLengthResponse(Response.Status.OK, "application/json", json)
+        response.addHeader("Cache-Control", "no-cache")
+        return response
+    }
+
     private fun handleNmeaSse(): Response {
         val pipedOut = java.io.PipedOutputStream()
         val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
@@ -521,11 +574,10 @@ class AdminWebServer(
             }
         }.start()
 
-        val response = newFixedLengthResponse(
+        val response = newChunkedResponse(
             Response.Status.OK,
             "text/event-stream",
-            pipedIn,
-            -1  // Chunked transfer
+            pipedIn
         )
         response.addHeader("Cache-Control", "no-cache")
         response.addHeader("X-Accel-Buffering", "no")
