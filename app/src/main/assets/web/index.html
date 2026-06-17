@@ -181,6 +181,7 @@
             <li><a href="#" onclick="showSection('stats', this)">Stats</a></li>
             <li><a href="#" onclick="showSection('settings', this)">Settings</a></li>
             <li><a href="#" onclick="showSection('nmea', this)">NMEA</a></li>
+            <li><a href="#" onclick="showSection('db', this)">DB</a></li>
             <li><a href="#" onclick="showSection('logs', this)">Logs</a></li>
         </ul>
     </nav>
@@ -297,6 +298,39 @@
                     <input type="checkbox" id="auto_scroll" checked> <label for="auto_scroll">Auto-scroll</label>
                     <button onclick="document.getElementById('nmea_output').value=''"
                         style="float: right; padding: 4px 8px;">Clear</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="db">
+            <div class="card">
+                <h2>Vessel Database</h2>
+                <div style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <input id="db_search" type="text" placeholder="Search name / MMSI / IMO / callsign"
+                        oninput="dbSearchDebounced()"
+                        style="flex: 1; min-width: 180px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;">
+                    <button onclick="loadVesselDb()"
+                        style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+                    <a href="/admin/api/vessels.csv" download
+                        style="padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; text-decoration: none;">Export CSV</a>
+                </div>
+                <div id="db_status" style="color: #666; font-size: 13px; margin-bottom: 8px;">—</div>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        <thead>
+                            <tr style="text-align: left; border-bottom: 2px solid #ddd;">
+                                <th style="padding: 6px;">MMSI</th>
+                                <th style="padding: 6px;">Name</th>
+                                <th style="padding: 6px;">IMO</th>
+                                <th style="padding: 6px;">Callsign</th>
+                                <th style="padding: 6px;">Type</th>
+                                <th style="padding: 6px;">Dest</th>
+                                <th style="padding: 6px;">Country</th>
+                                <th style="padding: 6px;">Last seen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="db_rows"></tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -590,6 +624,49 @@
                 startNmeaStream();
             } else {
                 stopNmeaStream();
+            }
+
+            // DB: load vessel table on entry
+            if (id === 'db') {
+                loadVesselDb();
+            }
+        }
+
+        // --- Vessel DB page ---
+        let dbSearchTimer = null;
+        function dbSearchDebounced() {
+            clearTimeout(dbSearchTimer);
+            dbSearchTimer = setTimeout(loadVesselDb, 300);
+        }
+
+        async function loadVesselDb() {
+            const statusEl = document.getElementById('db_status');
+            const tbody = document.getElementById('db_rows');
+            const q = document.getElementById('db_search').value.trim();
+            statusEl.textContent = 'Loading…';
+            try {
+                const url = '/admin/api/vessels?limit=500' + (q ? '&q=' + encodeURIComponent(q) : '');
+                const res = await fetch(url);
+                const data = await res.json();
+                const rows = data.vessels || [];
+                tbody.innerHTML = rows.map(v => {
+                    const seen = v.last_seen ? new Date(v.last_seen).toLocaleTimeString() : '';
+                    return '<tr style="border-bottom:1px solid #eee;">' +
+                        '<td style="padding:6px;">' + v.mmsi + '</td>' +
+                        '<td style="padding:6px;">' + escapeHtml(v.name || '') + '</td>' +
+                        '<td style="padding:6px;">' + (v.imo || '') + '</td>' +
+                        '<td style="padding:6px;">' + escapeHtml(v.callsign || '') + '</td>' +
+                        '<td style="padding:6px;">' + (v.ship_type || '') + '</td>' +
+                        '<td style="padding:6px;">' + escapeHtml(v.destination || '') + '</td>' +
+                        '<td style="padding:6px;">' + escapeHtml(v.country || '') + '</td>' +
+                        '<td style="padding:6px;">' + seen + '</td>' +
+                        '</tr>';
+                }).join('');
+                const writer = data.db_writer_running ? 'writer on' : 'writer OFF (enable "Write to internal DB")';
+                statusEl.textContent = 'Total in DB: ' + data.count + ' · showing ' + rows.length + ' · ' + writer;
+            } catch (e) {
+                statusEl.textContent = 'Error loading DB: ' + e;
+                tbody.innerHTML = '';
             }
         }
 

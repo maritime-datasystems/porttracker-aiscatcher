@@ -88,6 +88,7 @@ class AisReceiverService : Service() {
     private var adminWebServer: AdminWebServer? = null
     private var mqttPublisher: MqttPublisher? = null
     private var mqttNmeaListener: NMEAListener? = null
+    private var vesselCacheWriter: VesselCacheWriter? = null
     private val startLock = Object()  // Prevent concurrent starts
     // Dynamic USB receiver for detecting SDR plug/unplug while service is running
     private var usbReceiver: android.content.BroadcastReceiver? = null
@@ -240,7 +241,12 @@ class AisReceiverService : Service() {
         if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
             startMqttPublisher()
         }
-        
+
+        // Start internal vessel DB writer if "Write to internal DB" is enabled
+        if (config.internalDbEnabled) {
+            startVesselCacheWriter()
+        }
+
         isRunning = true
         } // end synchronized(startLock)
         return START_NOT_STICKY  // Don't auto-restart without USB IDs
@@ -748,6 +754,13 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error stopping MQTT publisher", e)
         }
         
+        // Stop vessel DB writer
+        try {
+            stopVesselCacheWriter()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping vessel cache writer", e)
+        }
+
         // Stop Admin Web Server
         try {
             adminWebServer?.stop()
@@ -929,7 +942,27 @@ class AisReceiverService : Service() {
             stopMqttPublisher()
         }
 
-        Log.i(TAG, "Live config changes applied (FRP=${config.remoteAccessEnabled}, MQTT=${config.mqttEnabled})")
+        // Start/stop internal vessel DB writer to match the toggle live
+        if (config.internalDbEnabled) {
+            startVesselCacheWriter()
+        } else {
+            stopVesselCacheWriter()
+        }
+
+        Log.i(TAG, "Live config changes applied (FRP=${config.remoteAccessEnabled}, MQTT=${config.mqttEnabled}, DB=${config.internalDbEnabled})")
+    }
+
+    /** Start the internal vessel DB writer (polls the engine's ship list). */
+    private fun startVesselCacheWriter() {
+        if (vesselCacheWriter != null) return
+        vesselCacheWriter = VesselCacheWriter(this, INTERNAL_WEB_PORT).also { it.start() }
+        Log.i(TAG, "Vessel cache writer enabled")
+    }
+
+    /** Stop the internal vessel DB writer. */
+    private fun stopVesselCacheWriter() {
+        vesselCacheWriter?.stop()
+        vesselCacheWriter = null
     }
 
     /**
@@ -1004,7 +1037,8 @@ data class ServiceConfig(
     val mqttTopicRaw: String = "",
     val mqttTopicJson: String = "",
     val mqttFormat: String = "aisc-json",
-    val mqttStationName: String = ""
+    val mqttStationName: String = "",
+    val internalDbEnabled: Boolean = false
 ) {
     companion object {
         fun fromPreferences(context: Context): ServiceConfig {
@@ -1042,7 +1076,8 @@ data class ServiceConfig(
                 mqttTopicRaw = prefs.getString("mqtt_topic_raw", "") ?: "",
                 mqttTopicJson = prefs.getString("mqtt_topic_json", "") ?: "",
                 mqttFormat = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json",
-                mqttStationName = prefs.getString("pref_station_name", "") ?: ""
+                mqttStationName = prefs.getString("pref_station_name", "") ?: "",
+                internalDbEnabled = prefs.getBoolean("internal_db_enabled", false)
             )
         }
     }

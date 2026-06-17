@@ -232,6 +232,18 @@ class AdminWebServer(
             return handleFrpRestart()
         }
 
+        // Internal vessel DB — list / count / CSV export for the "DB" page
+        if (session.method == Method.GET && session.uri == "/admin/api/vessels") {
+            return handleVesselList(session)
+        }
+        if (session.method == Method.GET && session.uri == "/admin/api/vessels/count") {
+            val n = VesselDatabase.getInstance(service).count()
+            return newFixedLengthResponse(Response.Status.OK, "application/json", """{"count":$n}""")
+        }
+        if (session.method == Method.GET && session.uri == "/admin/api/vessels.csv") {
+            return handleVesselCsv()
+        }
+
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Admin Endpoint Not Found")
     }
     
@@ -845,6 +857,48 @@ class AdminWebServer(
             ip == "0:0:0:0:0:0:0:1" ||
             ip == "::ffff:127.0.0.1" ||
             ip.equals("localhost", ignoreCase = true)
+    }
+
+    /**
+     * GET /admin/api/vessels?limit=&offset=&q=
+     * Returns cached static vessel rows for the DB page.
+     */
+    private fun handleVesselList(session: IHTTPSession): Response {
+        val params = parseQuery(session.queryParameterString)
+        val limit = (params["limit"]?.toIntOrNull() ?: 200).coerceIn(1, 2000)
+        val offset = (params["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+        val q = params["q"]
+
+        val db = VesselDatabase.getInstance(service)
+        val result = JSONObject().apply {
+            put("count", db.count())
+            put("db_writer_running", VesselCacheWriter.isRunning)
+            put("last_poll_ms", VesselCacheWriter.lastPollMs)
+            put("vessels", db.queryJson(limit, offset, q))
+        }
+        val response = newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
+        response.addHeader("Cache-Control", "no-cache")
+        return response
+    }
+
+    /** GET /admin/api/vessels.csv — full table as a CSV download. */
+    private fun handleVesselCsv(): Response {
+        val csv = VesselDatabase.getInstance(service).exportCsv()
+        val response = newFixedLengthResponse(Response.Status.OK, "text/csv", csv)
+        response.addHeader("Content-Disposition", "attachment; filename=\"vessels.csv\"")
+        return response
+    }
+
+    private fun parseQuery(query: String?): Map<String, String> {
+        if (query.isNullOrEmpty()) return emptyMap()
+        return query.split("&").mapNotNull {
+            val idx = it.indexOf('=')
+            if (idx <= 0) null
+            else try {
+                java.net.URLDecoder.decode(it.substring(0, idx), "UTF-8") to
+                    java.net.URLDecoder.decode(it.substring(idx + 1), "UTF-8")
+            } catch (e: Exception) { null }
+        }.toMap()
     }
 
     /**
