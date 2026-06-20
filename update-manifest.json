@@ -1,0 +1,8 @@
+{
+  "version_code": 22,
+  "version_name": "3.0-0620",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-aiscatcher/releases/download/v22/porttracker-ais.apk",
+  "apk_size": 0,
+  "release_notes": "Current release — MQTT topic auto-construction, OTA update support.",
+  "min_version_code": 18
+}

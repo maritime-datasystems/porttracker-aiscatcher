@@ -6,7 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -14,12 +13,26 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * OTA Update Manager — checks GitHub Releases for new APK versions
+ * OTA Update Manager — checks a remote manifest for new APK versions
  * and downloads/installs them on user request.
  *
+ * The manifest is a simple JSON file hosted on any HTTP(S) server:
+ *
+ *   {
+ *     "version_code": 23,
+ *     "version_name": "3.0-0620",
+ *     "apk_url": "https://your-server.com/porttracker-ais-v23.apk",
+ *     "apk_size": 12345678,
+ *     "release_notes": "Fixed MQTT topics, added OTA updates",
+ *     "min_version_code": 20
+ *   }
+ *
+ * The manifest URL is configurable via SharedPreferences key "update_manifest_url".
+ * Default: GitHub raw file in the porttracker-aiscatcher repo.
+ *
  * Flow:
- *  1. checkForUpdate() → calls GitHub Releases API, compares versionCode
- *  2. downloadAndInstall() → downloads APK asset, triggers Android install intent
+ *  1. checkForUpdate() → fetches manifest JSON, compares versionCode
+ *  2. downloadAndInstall() → downloads APK from apk_url, triggers Android install
  *
  * The user must tap "Install" on the device to confirm (Android security requirement).
  */
@@ -28,11 +41,11 @@ class UpdateManager(private val context: Context) {
     companion object {
         private const val TAG = "UpdateManager"
 
-        // GitHub Releases API endpoint (public repo, no auth needed)
-        private const val GITHUB_API_URL =
-            "https://api.github.com/repos/maritime-datasystems/porttracker-aiscatcher/releases/latest"
+        // Default manifest URL — raw JSON file in the GitHub repo
+        // Can be overridden via SharedPreferences "update_manifest_url"
+        const val DEFAULT_MANIFEST_URL =
+            "https://raw.githubusercontent.com/maritime-datasystems/porttracker-aiscatcher/main/update-manifest.json"
 
-        // Current app version code (from BuildConfig)
         fun getCurrentVersionCode(context: Context): Int {
             return try {
                 val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
@@ -73,7 +86,7 @@ class UpdateManager(private val context: Context) {
         val releaseNotes: String,
         val apkDownloadUrl: String?,
         val apkSizeBytes: Long,
-        val publishedAt: String,
+        val manifestUrl: String,
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("update_available", available)
@@ -84,68 +97,67 @@ class UpdateManager(private val context: Context) {
             put("release_notes", releaseNotes)
             put("apk_download_url", apkDownloadUrl ?: "")
             put("apk_size_bytes", apkSizeBytes)
-            put("published_at", publishedAt)
+            put("manifest_url", manifestUrl)
         }
     }
 
+    private fun getManifestUrl(): String {
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context)
+        return prefs.getString("update_manifest_url", null)?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_MANIFEST_URL
+    }
+
     /**
-     * Check GitHub Releases for a newer version.
+     * Check the remote manifest for a newer version.
      * Runs on calling thread (call from background!).
      */
     fun checkForUpdate(): UpdateInfo {
         isChecking = true
         lastError = null
+        val manifestUrl = getManifestUrl()
         try {
             val currentCode = getCurrentVersionCode(context)
             val currentName = getCurrentVersionName(context)
 
-            val conn = URL(GITHUB_API_URL).openConnection() as HttpURLConnection
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
+            Log.i(TAG, "Checking for updates from: $manifestUrl")
+
+            val conn = URL(manifestUrl).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "PortTracker-AIS/$currentName")
-            conn.connectTimeout = 10_000
-            conn.readTimeout = 10_000
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 15_000
+            conn.instanceFollowRedirects = true
 
             val responseCode = conn.responseCode
             if (responseCode != 200) {
-                throw Exception("GitHub API returned $responseCode")
+                throw Exception("Manifest fetch failed: HTTP $responseCode from $manifestUrl")
             }
 
             val body = conn.inputStream.bufferedReader().readText()
-            val release = JSONObject(body)
+            val manifest = JSONObject(body)
 
-            val tagName = release.optString("tag_name", "")  // e.g. "v22" or "v3.0.22"
-            val releaseName = release.optString("name", tagName)
-            val releaseBody = release.optString("body", "")
-            val publishedAt = release.optString("published_at", "")
+            val latestCode = manifest.optInt("version_code", 0)
+            val latestName = manifest.optString("version_name", "unknown")
+            val apkUrl = manifest.optString("apk_url", "")
+            val apkSize = manifest.optLong("apk_size", 0)
+            val releaseNotes = manifest.optString("release_notes", "")
+            val minVersionCode = manifest.optInt("min_version_code", 0)
 
-            // Extract version code from tag: "v22" → 22, "v3.0.22" → 22
-            val latestCode = tagName.replace(Regex("[^0-9]"), "").toIntOrNull()
-                ?: extractVersionCodeFromTag(tagName)
-
-            // Find APK asset
-            val assets = release.optJSONArray("assets") ?: JSONArray()
-            var apkUrl: String? = null
-            var apkSize: Long = 0
-            for (i in 0 until assets.length()) {
-                val asset = assets.getJSONObject(i)
-                val name = asset.optString("name", "")
-                if (name.endsWith(".apk")) {
-                    apkUrl = asset.optString("browser_download_url", null)
-                    apkSize = asset.optLong("size", 0)
-                    break
-                }
+            // Check if current version is too old for incremental update
+            if (minVersionCode > 0 && currentCode < minVersionCode) {
+                Log.w(TAG, "Current version $currentCode is below min_version_code $minVersionCode — full reinstall may be needed")
             }
 
             val info = UpdateInfo(
-                available = latestCode > currentCode,
+                available = latestCode > currentCode && apkUrl.isNotBlank(),
                 currentVersionCode = currentCode,
                 currentVersionName = currentName,
                 latestVersionCode = latestCode,
-                latestVersionName = releaseName,
-                releaseNotes = releaseBody,
-                apkDownloadUrl = apkUrl,
+                latestVersionName = latestName,
+                releaseNotes = releaseNotes,
+                apkDownloadUrl = apkUrl.ifBlank { null },
                 apkSizeBytes = apkSize,
-                publishedAt = publishedAt,
+                manifestUrl = manifestUrl,
             )
             lastCheckResult = info
             Log.i(TAG, "Update check: current=$currentCode, latest=$latestCode, available=${info.available}")
@@ -165,7 +177,7 @@ class UpdateManager(private val context: Context) {
                 releaseNotes = "",
                 apkDownloadUrl = null,
                 apkSizeBytes = 0,
-                publishedAt = "",
+                manifestUrl = manifestUrl,
             )
             lastCheckResult = info
             return info
@@ -183,7 +195,7 @@ class UpdateManager(private val context: Context) {
         val info = lastCheckResult
             ?: throw IllegalStateException("Call checkForUpdate() first")
         val apkUrl = info.apkDownloadUrl
-            ?: throw IllegalStateException("No APK download URL in latest release")
+            ?: throw IllegalStateException("No APK download URL in manifest")
 
         isDownloading = true
         downloadProgress = 0
@@ -195,10 +207,9 @@ class UpdateManager(private val context: Context) {
             val conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "PortTracker-AIS/${info.currentVersionName}")
             conn.connectTimeout = 30_000
-            conn.readTimeout = 60_000
+            conn.readTimeout = 120_000
             conn.instanceFollowRedirects = true
 
-            // GitHub redirects to S3, follow it
             val responseCode = conn.responseCode
             if (responseCode != 200) {
                 throw Exception("Download failed: HTTP $responseCode")
@@ -242,7 +253,6 @@ class UpdateManager(private val context: Context) {
 
     private fun installApk(apkFile: File) {
         val uri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            // Android 7+ requires FileProvider
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
         } else {
             Uri.fromFile(apkFile)
@@ -262,14 +272,9 @@ class UpdateManager(private val context: Context) {
         put("downloading", isDownloading)
         put("download_progress", downloadProgress)
         put("error", lastError)
+        put("manifest_url", getManifestUrl())
         if (lastCheckResult != null) {
             put("update", lastCheckResult!!.toJson())
         }
-    }
-
-    private fun extractVersionCodeFromTag(tag: String): Int {
-        // Try patterns: "v22", "v3.0.22", "release-22"
-        val parts = tag.split(".")
-        return parts.lastOrNull()?.replace(Regex("[^0-9]"), "")?.toIntOrNull() ?: 0
     }
 }
