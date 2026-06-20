@@ -691,6 +691,30 @@ var SettingsRenderer = {
                     <b>Note:</b> Saving settings will automatically restart the service. Use this button only if you want to force a restart without saving.
                 </div>
             </div>
+
+            <!-- OTA Update Section -->
+            <div class="card mt-4">
+                <div class="card-header"><i class="bi bi-cloud-download"></i> Software Update</div>
+                <div class="card-body">
+                    <div id="update-status" class="mb-3">
+                        <span class="text-muted">Click "Check for Updates" to see if a newer version is available.</span>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button id="btn-update-check" class="btn btn-outline-primary" onclick="SettingsRenderer.checkForUpdate()">
+                            <i class="bi bi-arrow-repeat"></i> Check for Updates
+                        </button>
+                        <button id="btn-update-install" class="btn btn-success d-none" onclick="SettingsRenderer.installUpdate()">
+                            <i class="bi bi-download"></i> Download & Install
+                        </button>
+                    </div>
+                    <div id="update-progress" class="mt-3 d-none">
+                        <div class="progress" style="height: 24px;">
+                            <div id="update-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%">0%</div>
+                        </div>
+                        <small class="text-muted mt-1 d-block">Downloading APK... The install prompt will appear on the device screen.</small>
+                    </div>
+                </div>
+            </div>
         `;
     },
 
@@ -1160,6 +1184,114 @@ var SettingsRenderer = {
             `;
         } else {
             statusDiv.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> Could not parse any fields from the pasted config. Check the format.</span>';
+        }
+    },
+
+    // --- OTA Update Functions ---
+
+    checkForUpdate: async function () {
+        const statusEl = document.getElementById('update-status');
+        const checkBtn = document.getElementById('btn-update-check');
+        const installBtn = document.getElementById('btn-update-install');
+
+        checkBtn.disabled = true;
+        checkBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Checking...';
+        statusEl.innerHTML = '<span class="text-muted"><i class="bi bi-hourglass-split"></i> Checking GitHub releases...</span>';
+
+        try {
+            const resp = await fetch('/admin/api/update/check');
+            const data = await resp.json();
+
+            if (!data.success) {
+                statusEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle"></i> ${data.error || 'Check failed'}</div>`;
+                return;
+            }
+
+            const u = data.update;
+            if (u.update_available) {
+                statusEl.innerHTML = `
+                    <div class="alert alert-warning py-2 mb-0">
+                        <i class="bi bi-cloud-arrow-down"></i> <strong>Update available!</strong><br>
+                        <small>Current: <code>${u.current_version_name}</code> (v${u.current_version_code}) → Latest: <code>${u.latest_version_name}</code> (v${u.latest_version_code})</small>
+                        ${u.release_notes ? '<hr class="my-1"><small>' + u.release_notes.substring(0, 200) + '</small>' : ''}
+                        ${u.apk_size_bytes ? '<br><small class="text-muted">APK size: ' + (u.apk_size_bytes / 1024 / 1024).toFixed(1) + ' MB</small>' : ''}
+                    </div>`;
+                installBtn.classList.remove('d-none');
+            } else {
+                statusEl.innerHTML = `
+                    <div class="alert alert-success py-2 mb-0">
+                        <i class="bi bi-check-circle"></i> <strong>Up to date!</strong><br>
+                        <small>Current version: <code>${u.current_version_name}</code> (v${u.current_version_code})</small>
+                    </div>`;
+                installBtn.classList.add('d-none');
+            }
+        } catch (e) {
+            statusEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-wifi-off"></i> Network error: ${e.message}</div>`;
+        } finally {
+            checkBtn.disabled = false;
+            checkBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Check for Updates';
+        }
+    },
+
+    installUpdate: async function () {
+        const installBtn = document.getElementById('btn-update-install');
+        const progressDiv = document.getElementById('update-progress');
+        const progressBar = document.getElementById('update-progress-bar');
+        const statusEl = document.getElementById('update-status');
+
+        installBtn.disabled = true;
+        installBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Starting...';
+        progressDiv.classList.remove('d-none');
+
+        try {
+            const resp = await fetch('/admin/api/update/install', { method: 'POST' });
+            const data = await resp.json();
+
+            if (!data.success) {
+                statusEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
+                progressDiv.classList.add('d-none');
+                installBtn.disabled = false;
+                installBtn.innerHTML = '<i class="bi bi-download"></i> Download & Install';
+                return;
+            }
+
+            // Poll progress
+            const pollInterval = setInterval(async () => {
+                try {
+                    const sr = await fetch('/admin/api/update/status');
+                    const sd = await sr.json();
+                    const pct = sd.download_progress || 0;
+                    progressBar.style.width = pct + '%';
+                    progressBar.textContent = pct + '%';
+
+                    if (!sd.downloading && pct >= 100) {
+                        clearInterval(pollInterval);
+                        statusEl.innerHTML = `
+                            <div class="alert alert-success py-2 mb-0">
+                                <i class="bi bi-check-circle"></i> <strong>APK downloaded!</strong>
+                                The install dialog should appear on the device screen. Tap "Install" to complete the update.
+                            </div>`;
+                        progressDiv.classList.add('d-none');
+                        installBtn.classList.add('d-none');
+                    } else if (!sd.downloading && sd.error) {
+                        clearInterval(pollInterval);
+                        statusEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle"></i> ${sd.error}</div>`;
+                        progressDiv.classList.add('d-none');
+                        installBtn.disabled = false;
+                        installBtn.innerHTML = '<i class="bi bi-download"></i> Retry';
+                    }
+                } catch (e) {
+                    // Network error during polling — might mean app is restarting
+                    clearInterval(pollInterval);
+                    statusEl.innerHTML = '<div class="alert alert-info py-2 mb-0"><i class="bi bi-arrow-clockwise"></i> App may be restarting for the update...</div>';
+                }
+            }, 1000);
+
+        } catch (e) {
+            statusEl.innerHTML = `<div class="alert alert-danger py-2 mb-0"><i class="bi bi-wifi-off"></i> ${e.message}</div>`;
+            progressDiv.classList.add('d-none');
+            installBtn.disabled = false;
+            installBtn.innerHTML = '<i class="bi bi-download"></i> Download & Install';
         }
     }
 };

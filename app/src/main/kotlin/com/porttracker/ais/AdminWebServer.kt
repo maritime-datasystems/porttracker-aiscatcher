@@ -23,6 +23,7 @@ class AdminWebServer(
     }
     private var isRunning = false
     private val configManager = ConfigurationManager(service)
+    private val updateManager = UpdateManager(service)
 
     override fun start() {
         try {
@@ -230,6 +231,20 @@ class AdminWebServer(
         // FRP restart — restart FRP tunnel with current preferences
         if (session.method == Method.POST && session.uri == "/admin/api/frp/restart") {
             return handleFrpRestart()
+        }
+
+        // --- OTA Update Endpoints ---
+
+        if (session.method == Method.GET && session.uri == "/admin/api/update/check") {
+            return handleUpdateCheck()
+        }
+
+        if (session.method == Method.POST && session.uri == "/admin/api/update/install") {
+            return handleUpdateInstall()
+        }
+
+        if (session.method == Method.GET && session.uri == "/admin/api/update/status") {
+            return newFixedLengthResponse(Response.Status.OK, "application/json", updateManager.getStatusJson().toString())
         }
 
         // Internal vessel DB — list / count / CSV export for the "DB" page
@@ -865,6 +880,52 @@ class AdminWebServer(
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
                 JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
         }
+    }
+
+    // --- OTA Update Handlers ---
+
+    private fun handleUpdateCheck(): Response {
+        return try {
+            // Run check synchronously (NanoHTTPD handles each request in its own thread)
+            val info = updateManager.checkForUpdate()
+            val json = JSONObject().apply {
+                put("success", true)
+                put("update", info.toJson())
+                if (updateManager.lastError != null) {
+                    put("error", updateManager.lastError)
+                }
+            }
+            newFixedLengthResponse(Response.Status.OK, "application/json", json.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Update check failed", e)
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json",
+                JSONObject().apply { put("success", false); put("error", e.message ?: "Check failed") }.toString())
+        }
+    }
+
+    private fun handleUpdateInstall(): Response {
+        if (updateManager.isDownloading) {
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":false,"error":"Download already in progress","progress":${updateManager.downloadProgress}}""")
+        }
+
+        val info = updateManager.lastCheckResult
+        if (info == null || !info.available) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "application/json",
+                """{"success":false,"error":"No update available. Run /admin/api/update/check first."}""")
+        }
+
+        // Start download + install on a background thread
+        Thread {
+            try {
+                updateManager.downloadAndInstall()
+            } catch (e: Exception) {
+                Log.e(TAG, "Update install failed", e)
+            }
+        }.start()
+
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            """{"success":true,"message":"Download started. Check /admin/api/update/status for progress."}""")
     }
 
     /**
