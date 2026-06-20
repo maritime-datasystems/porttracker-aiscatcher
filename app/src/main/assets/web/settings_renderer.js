@@ -550,6 +550,7 @@ var SettingsRenderer = {
         const mqttTopicRaw = this.val('mqtt_topic_raw', '');
         const mqttTopicJson = this.val('mqtt_topic_json', '');
         const mqttFormat = this.val('mqtt_format', 'aisc-json');
+        const topicsAssigned = mqttTopicRaw || mqttTopicJson;
 
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
@@ -559,7 +560,7 @@ var SettingsRenderer = {
                 <div class="card-body">
                     <h6 class="card-title"><i class="bi bi-clipboard-plus"></i> Paste Station Config</h6>
                     <p class="text-muted" style="font-size:0.85em">Copy the config from your <a href="https://www.trusteddocks.com/account/ais-stations" target="_blank">TrustedDocks account</a> and paste it below:</p>
-                    <textarea id="station-config-paste" class="form-control font-monospace" rows="8" placeholder="[TrustedDocks Station]\nstation_name = ...\nbroker = ...\nusername = ...\npassword = ...\ntopic_ais_raw = ...\ntopic_ais_json = ..."></textarea>
+                    <textarea id="station-config-paste" class="form-control font-monospace" rows="8" placeholder="[TrustedDocks Station]\nstation_name = ...\nbroker = ...\nusername = ...\npassword = ..."></textarea>
                     <button class="btn btn-primary mt-2" onclick="SettingsRenderer.applyPastedConfig()">
                         <i class="bi bi-check-lg"></i> Apply Config
                     </button>
@@ -600,14 +601,17 @@ var SettingsRenderer = {
                         <div class="form-text text-warning"><i class="bi bi-exclamation-triangle"></i> Password is shown only once at station creation. Save it!</div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">AIS Raw Topic</label>
-                        <input type="text" class="form-control font-monospace" id="mqtt_topic_raw" 
-                            value="${mqttTopicRaw}" placeholder="e.g. ais/raw/SHARE/4/1000005">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">AIS JSON Topic</label>
-                        <input type="text" class="form-control font-monospace" id="mqtt_topic_json" 
-                            value="${mqttTopicJson}" placeholder="e.g. ais/aisc-json/SHARE/4/1000005">
+                        <label class="form-label">MQTT Topics</label>
+                        ${topicsAssigned ? `
+                        <div class="alert alert-info py-2 mb-0" style="font-size:0.85em">
+                            <i class="bi bi-lock"></i> <strong>Auto-assigned</strong> (based on your user ID and antenna ID)<br>
+                            <code class="text-dark">${mqttTopicJson || mqttTopicRaw}</code>
+                        </div>
+                        ` : `
+                        <div class="alert alert-warning py-2 mb-0" style="font-size:0.85em">
+                            <i class="bi bi-exclamation-triangle"></i> Topics not yet assigned. Connect via the <strong>Gateway API Key</strong> or use <strong>Paste Config</strong> above to provision.
+                        </div>
+                        `}
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Publish Format</label>
@@ -750,10 +754,8 @@ var SettingsRenderer = {
         collect('mqtt_username');
         collect('mqtt_password');
         collect('mqtt_antenna_uuid');
-        collect('mqtt_topic_raw');
-        collect('mqtt_topic_json');
         collect('mqtt_format');
-        // mqtt_station_name removed — uses pref_station_name instead
+        // Topics are auto-constructed (userId/antennaId) — not user-editable
 
         // Collect Internal DB settings
         collect('internal_db_enabled', 'bool');
@@ -1126,9 +1128,8 @@ var SettingsRenderer = {
             'antenna_uuid': 'mqtt_antenna_uuid',
             'broker': 'mqtt_broker_url',
             'username': 'mqtt_username',
-            'password': 'mqtt_password',
-            'topic_ais_raw': 'mqtt_topic_raw',
-            'topic_ais_json': 'mqtt_topic_json'
+            'password': 'mqtt_password'
+            // Topics are auto-constructed from userId/antennaId — not pasted
         };
 
         let filled = 0;

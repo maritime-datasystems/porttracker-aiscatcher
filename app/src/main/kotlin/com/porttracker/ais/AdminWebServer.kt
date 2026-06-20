@@ -666,15 +666,13 @@ class AdminWebServer(
                     """{"success":false,"error":"Invalid API key or network error"}""")
 
             // Persist to SharedPreferences.
-            // IMPORTANT: write the *canonical* keys that ServiceConfig,
-            // MqttPublisher and the health endpoint actually read
-            // (pref_station_name, mqtt_username, mqtt_password) — the previous
-            // version wrote mqtt_user_name (consumed nowhere) from the account
-            // name and never persisted the MQTT credentials, so provisioning
-            // via this endpoint never reached the publisher.
-            // NOTE: station-config returns topic_prefix only, not the full
-            // topic_raw/topic_json; those still come from the paste/QR config
-            // flow, so MQTT topics are intentionally left untouched here.
+            // Topics are auto-constructed from userId + antennaId.
+            // Format: ais/{format}/{userId}/{antennaId}
+            // This ensures consistent, deterministic topic assignment —
+            // users cannot misconfigure their own topics.
+            val topicJson = "ais/aisc-json/${stationConfig.userId}/${stationConfig.antennaId}"
+            val topicRaw = "ais/raw/${stationConfig.userId}/${stationConfig.antennaId}"
+
             val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
             prefs.edit()
                 .putBoolean("mqtt_enabled", true)
@@ -684,10 +682,15 @@ class AdminWebServer(
                 .putString("mqtt_username", stationConfig.mqttUsername)
                 .putString("mqtt_password", stationConfig.mqttPassword)
                 .putString("mqtt_broker_url", stationConfig.brokerUrl)
+                // Auto-constructed topics (userId/antennaId):
+                .putString("mqtt_topic_json", topicJson)
+                .putString("mqtt_topic_raw", topicRaw)
+                .putString("mqtt_format", "aisc-json")
                 // Metadata kept for the gateway/status display:
                 .putString("mqtt_station_name", stationConfig.portName)
                 .putInt("mqtt_antenna_id", stationConfig.antennaId)
                 .putInt("mqtt_port_id", stationConfig.portId)
+                .putInt("mqtt_user_id", stationConfig.userId)
                 .putString("mqtt_user_name", stationConfig.userName)
                 .putString("mqtt_company_name", stationConfig.companyName)
                 .apply()

@@ -877,10 +877,27 @@ class AisReceiverService : Service() {
                 val brokerUrl = prefs.getString("mqtt_broker_url", "") ?: ""
                 val username = prefs.getString("mqtt_username", "") ?: ""
                 val password = prefs.getString("mqtt_password", "") ?: ""
-                val topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
-                val topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
+                var topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
+                var topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
                 val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
                 val stationName = prefs.getString("pref_station_name", "") ?: ""
+
+                // Auto-construct topics from userId/antennaId if not explicitly set.
+                // This handles devices provisioned before auto-topic construction was added.
+                if (topicRaw.isEmpty() && topicJson.isEmpty()) {
+                    val userId = prefs.getInt("mqtt_user_id", 0)
+                    val antennaId = prefs.getInt("mqtt_antenna_id", 0)
+                    if (userId > 0 && antennaId > 0) {
+                        topicJson = "ais/aisc-json/$userId/$antennaId"
+                        topicRaw = "ais/raw/$userId/$antennaId"
+                        Log.i(TAG, "Auto-constructed MQTT topics from userId=$userId, antennaId=$antennaId")
+                        // Persist so we don't re-derive every time
+                        prefs.edit()
+                            .putString("mqtt_topic_json", topicJson)
+                            .putString("mqtt_topic_raw", topicRaw)
+                            .apply()
+                    }
+                }
 
                 if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
                     Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
